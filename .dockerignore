@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+!.env.example
+.copilot-azure
+.tmp
+node_modules
+**/node_modules
+**/dist
+*.log
+QA_TEST_REPORT_*.md

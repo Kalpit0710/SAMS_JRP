@@ -1,0 +1,131 @@
+name: Deploy
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+      - develop
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy
+        required: true
+        type: choice
+        options:
+          - development
+          - production
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event.workflow_run.head_branch == 'main' && 'production' || 'development' }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event.workflow_run.head_branch == 'main' && 'production' || 'development' }}
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Resolve release ref
+        id: release
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          SELECTED_ENVIRONMENT: ${{ inputs.environment }}
+          WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            if [[ "$SELECTED_ENVIRONMENT" == "production" ]]; then
+              echo "ref=main" >> "$GITHUB_OUTPUT"
+            else
+              echo "ref=develop" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "ref=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out release
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.release.outputs.ref }}
+
+      - name: Record release SHA
+        shell: bash
+        run: echo "DEPLOY_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Trigger Render deployment
+        shell: bash
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: curl --fail --show-error --silent --request POST "${RENDER_DEPLOY_HOOK_URL}&ref=${DEPLOY_SHA}"
+
+      - name: Wait for the Render release
+        shell: bash
+        env:
+          RENDER_API_URL: ${{ vars.RENDER_API_URL }}
+        run: |
+          for attempt in {1..90}; do
+            health_json="$(curl --fail --silent --show-error "$RENDER_API_URL/api/health" 2>/dev/null || true)"
+            deployed_version="$(jq --raw-output '.version // empty' <<< "$health_json")"
+            health_status="$(jq --raw-output '.status // empty' <<< "$health_json")"
+            if [[ "$health_status" == "healthy" && "$deployed_version" == "$DEPLOY_SHA" ]]; then
+              echo "Render is healthy on commit $DEPLOY_SHA"
+              exit 0
+            fi
+            echo "Waiting for Render release $DEPLOY_SHA (attempt $attempt/90, current: ${deployed_version:-unavailable})"
+            sleep 10
+          done
+          echo "Render did not become healthy on commit $DEPLOY_SHA" >&2
+          exit 1
+
+      - name: Deploy web application to Vercel
+        id: vercel
+        shell: bash
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          deployment_url="$(npx --yes vercel@57.0.0 deploy --prod --yes --token="$VERCEL_TOKEN")"
+          echo "url=$deployment_url" >> "$GITHUB_OUTPUT"
+          echo "Vercel deployment: $deployment_url"
+
+      - name: Verify public application
+        shell: bash
+        env:
+          WEB_URL: ${{ vars.WEB_URL }}
+        run: |
+          curl --fail --show-error --silent --retry 12 --retry-delay 5 --retry-all-errors "$WEB_URL" > /dev/null
+          health_json="$(curl --fail --show-error --silent --retry 12 --retry-delay 5 --retry-all-errors "$WEB_URL/api/health")"
+          deployed_version="$(jq --raw-output '.version // empty' <<< "$health_json")"
+          if [[ "$deployed_version" != "$DEPLOY_SHA" ]]; then
+            echo "Public API reports $deployed_version instead of $DEPLOY_SHA" >&2
+            exit 1
+          fi
+          echo "Application verified at $WEB_URL on commit $DEPLOY_SHA"
+
+      - name: Write deployment summary
+        shell: bash
+        env:
+          WEB_URL: ${{ vars.WEB_URL }}
+          VERCEL_DEPLOYMENT_URL: ${{ steps.vercel.outputs.url }}
+        run: |
+          {
+            echo "## Deployment complete"
+            echo ""
+            echo "- Commit: \`$DEPLOY_SHA\`"
+            echo "- Application: $WEB_URL"
+            echo "- Vercel deployment: $VERCEL_DEPLOYMENT_URL"
+          } >> "$GITHUB_STEP_SUMMARY"
