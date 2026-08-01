@@ -1,42 +1,6 @@
 projects:
   - name: sams
     environments:
-      - name: development
-        networking:
-          isolation: enabled
-        permissions:
-          protection: disabled
-        services:
-          - type: web
-            runtime: docker
-            name: sams-api-dev
-            plan: free
-            region: singapore
-            branch: develop
-            autoDeployTrigger: off
-            dockerfilePath: ./Dockerfile
-            dockerContext: .
-            healthCheckPath: /api/health
-            maxShutdownDelaySeconds: 30
-            envVars:
-              - key: NODE_ENV
-                value: production
-              - key: PORT
-                value: 4000
-              - key: TRUST_PROXY
-                value: 1
-              - key: MONGODB_URI
-                sync: false
-              - key: JWT_ACCESS_SECRET
-                generateValue: true
-              - key: JWT_REFRESH_SECRET
-                generateValue: true
-              - key: CORS_ORIGIN
-                sync: false
-              - key: SCHOOL_NAME
-                sync: false
-              - key: ACADEMIC_SESSION
-                sync: false
       - name: production
         networking:
           isolation: enabled

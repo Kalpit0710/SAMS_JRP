@@ -8,34 +8,25 @@ on:
       - completed
     branches:
       - main
-      - develop
   workflow_dispatch:
-    inputs:
-      environment:
-        description: Environment to deploy
-        required: true
-        type: choice
-        options:
-          - development
-          - production
 
 permissions:
   contents: read
 
 concurrency:
-  group: deploy-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event.workflow_run.head_branch }}
+  group: deploy-production
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy ${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event.workflow_run.head_branch == 'main' && 'production' || 'development' }}
+    name: Deploy production
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
-      name: ${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event.workflow_run.head_branch == 'main' && 'production' || 'development' }}
+      name: production
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -45,15 +36,10 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          SELECTED_ENVIRONMENT: ${{ inputs.environment }}
           WORKFLOW_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
-            if [[ "$SELECTED_ENVIRONMENT" == "production" ]]; then
-              echo "ref=main" >> "$GITHUB_OUTPUT"
-            else
-              echo "ref=develop" >> "$GITHUB_OUTPUT"
-            fi
+            echo "ref=main" >> "$GITHUB_OUTPUT"
           else
             echo "ref=$WORKFLOW_SHA" >> "$GITHUB_OUTPUT"
           fi

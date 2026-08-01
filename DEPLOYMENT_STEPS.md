@@ -1,14 +1,12 @@
 # SAMS Deployment Steps
 
 This runbook deploys the React application to Vercel, the Express API to Render,
-and uses GitHub Actions for CI/CD. Development and production are isolated at the
-provider, secret, application, and database levels.
+and uses GitHub Actions for CI/CD. The `main` branch is the single production source.
 
 ## 1. Deployment model
 
 | Git branch | GitHub environment | Vercel project  | Render service  | MongoDB database |
 | ---------- | ------------------ | --------------- | --------------- | ---------------- |
-| `develop`  | `development`      | `sams-web-dev`  | `sams-api-dev`  | `sams-dev`       |
 | `main`     | `production`       | `sams-web-prod` | `sams-api-prod` | `sams`           |
 
 Vercel reverse-proxies `/api/*` to Render by using `API_ORIGIN`. Browser requests
@@ -49,9 +47,6 @@ git init -b main
 git add .
 git commit -m "Prepare SAMS deployment"
 gh repo create attendance-system --private --source . --remote origin --push
-git switch -c develop
-git push --set-upstream origin develop
-git switch main
 ```
 
 Without GitHub CLI, create the empty repository in GitHub and then run:
@@ -59,66 +54,60 @@ Without GitHub CLI, create the empty repository in GitHub and then run:
 ```powershell
 git remote add origin https://github.com/<owner>/<repository>.git
 git push --set-upstream origin main
-git push origin develop
 ```
 
-Protect both branches. Require the `Lint, build, and test` and
-`Build production image` checks before merge. Require pull requests for `main`.
+Protect `main`. Require the `Lint, build, and test` and `Build production image`
+checks before merge, and require pull requests.
 
 ## 4. Prepare MongoDB Atlas
 
-1. Create separate Atlas database users for development and production.
-2. Use separate databases, such as `sams-dev` and `sams`.
-3. Put the database name explicitly in each connection string. A URI without it can
+1. Create a least-privilege Atlas database user for production.
+2. Use the `sams` database.
+3. Put the database name explicitly in the connection string. A URI without it can
    silently use the `test` database.
 4. Add Render's outbound ranges to Atlas Network Access when the selected Render plan
-   provides stable ranges. If development uses dynamic free-tier egress, Atlas may
-   require `0.0.0.0/0`; use a strong unique database password and least-privilege user.
+  provides stable ranges. If dynamic egress requires `0.0.0.0/0`, use a strong unique
+  database password and a least-privilege user.
 5. Back up the production database before the first production deployment.
-
-Never reuse the development database user, JWT secrets, or database in production.
 
 ## 5. Create the Vercel projects
 
-Create two Vercel projects from the same GitHub repository:
+Create one Vercel project from the GitHub repository:
 
-1. Create `sams-web-dev`; set its production branch to `develop`.
-2. Create `sams-web-prod`; set its production branch to `main`.
-3. Use the repository root as the project root. The checked-in `vercel.json` supplies
+1. Create `sams-web-prod`; set its production branch to `main`.
+2. Use the repository root as the project root. The checked-in `vercel.json` supplies
    the install command, web build command, output directory, SPA fallback, security
    headers, and API proxy.
-4. Record each project's stable Vercel URL.
-5. Disconnect Vercel's Git integration after project creation, or disable its automatic
+3. Record the project's stable Vercel URL.
+4. Disconnect Vercel's Git integration after project creation, or disable its automatic
    Git deployments. GitHub Actions is the deployment owner and duplicate deploys should
    not run in parallel.
 
-The API URL is not known yet. Add `API_ORIGIN` after creating the Render services.
+The API URL is not known yet. Add `API_ORIGIN` after creating the Render service.
 
 ## 6. Create the Render services
 
-Before syncing the Blueprint, confirm that both `main` and `develop` exist on GitHub.
+Before syncing the Blueprint, confirm that `main` exists on GitHub.
 
 1. In Render, select **New > Blueprint**.
 2. Connect the GitHub repository and use the root `render.yaml`.
-3. Confirm that Render will create the `sams` project with `development` and
-   `production` environments.
-4. Enter the prompted values separately for both services:
+3. Confirm that Render will create the `sams` project with one `production` environment
+  containing the `sams-api-prod` service from `main`.
+4. Enter the prompted values for the service:
 
-| Render variable    | Development                               | Production                                 |
-| ------------------ | ----------------------------------------- | ------------------------------------------ |
-| `MONGODB_URI`      | Atlas URI ending in `/sams-dev`           | Atlas URI ending in `/sams`                |
-| `CORS_ORIGIN`      | Exact `https://...` URL of `sams-web-dev` | Exact `https://...` URL of `sams-web-prod` |
-| `SCHOOL_NAME`      | Development display name                  | Production school name                     |
-| `ACADEMIC_SESSION` | Current development session               | Current production session                 |
+| Render variable    | Production value                          |
+| ------------------ | ----------------------------------------- |
+| `MONGODB_URI`      | Atlas URI ending in `/sams`                |
+| `CORS_ORIGIN`      | Exact `https://...` URL of `sams-web-prod` |
+| `SCHOOL_NAME`      | Production school name                    |
+| `ACADEMIC_SESSION` | Current production session                |
 
-Render generates distinct `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` values for
-each service. Keep `NODE_ENV=production` in both hosted environments so secure cookies
-and production error handling remain enabled.
+Render generates `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET`. Keep
+`NODE_ENV=production` so secure cookies and production error handling remain enabled.
 
-Wait for the initial services to become healthy, then record both Render origins:
+Wait for the initial service to become healthy, then record its Render origin:
 
 ```text
-https://sams-api-dev.onrender.com
 https://sams-api-prod.onrender.com
 ```
 
@@ -126,28 +115,24 @@ Actual service URLs can differ if the names are already taken.
 
 ## 7. Finish Vercel configuration
 
-For each Vercel project, add a **Production** environment variable named
-`API_ORIGIN`. Use the matching Render origin without a trailing slash:
+In the Vercel project, add a **Production** environment variable named `API_ORIGIN`.
+Use the Render origin without a trailing slash:
 
-| Vercel project  | `API_ORIGIN`              |
-| --------------- | ------------------------- |
-| `sams-web-dev`  | Development Render origin |
-| `sams-web-prod` | Production Render origin  |
+| Vercel project  | `API_ORIGIN`             |
+| --------------- | ------------------------ |
+| `sams-web-prod` | Production Render origin |
 
-The workflow deliberately runs `vercel deploy --prod` against two different project
-IDs. This gives both environments a stable URL and prevents preview settings from
-leaking into production.
+The workflow runs `vercel deploy --prod` against this project after Render is healthy.
 
 ## 8. Configure GitHub environments
 
-Create GitHub environments named exactly `development` and `production` under
+Create one GitHub environment named exactly `production` under
 **Repository Settings > Environments**.
 
-For `development`, allow deployments only from `develop`. For `production`, allow
-deployments only from `main`, add a required reviewer, and prevent self-review when
-your GitHub plan supports it.
+Allow deployments only from `main`, add a required reviewer, and prevent self-review
+when your GitHub plan supports it.
 
-Add these secrets to each environment using that environment's provider values:
+Add these secrets to the environment:
 
 | Secret                   | Value                                     |
 | ------------------------ | ----------------------------------------- |
@@ -168,20 +153,11 @@ Project and team IDs are shown in Vercel project settings and in the generated
 
 ## 9. Run the first deployments
 
-Development deploys automatically after a successful CI run on `develop`:
+A successful CI run after a push to `main` starts the protected production deployment.
+The deployment job waits for the configured GitHub environment approval.
 
-```powershell
-git switch develop
-git merge main
-git push
-```
-
-Verify development before production. Then merge `develop` into `main` through a pull
-request. A successful CI run on `main` starts the protected production deployment.
-The production job waits for the configured GitHub environment approval.
-
-You can also run **Actions > Deploy > Run workflow** and select an environment. Manual
-deployment always resolves the current `develop` or `main` tip and records its SHA.
+You can also run **Actions > Deploy > Run workflow**. Manual deployment resolves the
+current `main` tip and records its SHA.
 
 The CD workflow performs these gates in order:
 
@@ -211,7 +187,7 @@ confirm teachers must replace temporary PINs before accessing application data.
 
 ## 11. Post-deployment verification
 
-Run these checks for development and then production:
+Run these checks against production:
 
 ```powershell
 Invoke-RestMethod https://<render-host>/api/health
