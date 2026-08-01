@@ -109,9 +109,9 @@ describe("notifications and data transfer", () => {
     expect(alert.waLink.startsWith("https://wa.me/919876543210?text=")).toBe(true);
     expect(alert.waLinkEn.startsWith("https://wa.me/919876543210?text=")).toBe(true);
     const message = new URL(alert.waLink).searchParams.get("text") ?? "";
-    expect(message).toContain("Absent Child (Class Alerts) was absent");
+    expect(message).toContain("Absent Child (Class 6) was absent");
     expect(message).toContain("जे. आर. प्रिपरेटरी स्कूल से उपस्थिति सूचना");
-    expect(message).toContain("Absent Child (Class Alerts)");
+    expect(message).toContain("Absent Child (Class 6)");
     expect(message).not.toContain("*English*");
     expect(message).not.toContain("*हिंदी*");
     expect(message.indexOf("Attendance update")).toBeLessThan(message.indexOf("उपस्थिति सूचना"));

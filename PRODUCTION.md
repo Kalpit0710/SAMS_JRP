@@ -1,5 +1,9 @@
 # SAMS Production Runbook
 
+> The primary Vercel + Render + GitHub Actions deployment path is documented in
+> [DEPLOYMENT_STEPS.md](DEPLOYMENT_STEPS.md). This file describes the alternative
+> single-container deployment, where Express also serves the compiled React app.
+
 ## Architecture
 
 The production container runs one Node.js process on port `4000`:
@@ -18,18 +22,18 @@ container directly over HTTP.
 Set these values through the hosting platform's secret/configuration store. Never put
 them in the image or source control.
 
-| Variable | Production value |
-| --- | --- |
-| `NODE_ENV` | `production` |
-| `PORT` | `4000` |
-| `MONGODB_URI` | Atlas connection string for the `sams` database |
-| `JWT_ACCESS_SECRET` | Unique random secret, at least 32 characters |
+| Variable             | Production value                                       |
+| -------------------- | ------------------------------------------------------ |
+| `NODE_ENV`           | `production`                                           |
+| `PORT`               | `4000`                                                 |
+| `MONGODB_URI`        | Atlas connection string for the `sams` database        |
+| `JWT_ACCESS_SECRET`  | Unique random secret, at least 32 characters           |
 | `JWT_REFRESH_SECRET` | Different unique random secret, at least 32 characters |
-| `CORS_ORIGIN` | Exact public HTTPS origin |
-| `TRUST_PROXY` | Number of trusted ingress proxy hops, normally `1` |
-| `SCHOOL_NAME` | Public school display name |
-| `ACADEMIC_SESSION` | Current school session |
-| `APP_VERSION` | Immutable release identifier |
+| `CORS_ORIGIN`        | Exact public HTTPS origin                              |
+| `TRUST_PROXY`        | Number of trusted ingress proxy hops, normally `1`     |
+| `SCHOOL_NAME`        | Public school display name                             |
+| `ACADEMIC_SESSION`   | Current school session                                 |
+| `APP_VERSION`        | Immutable release identifier                           |
 
 `ADMIN_INITIAL_PASSWORD` is required only when running the admin seed or school-data
 import scripts. It must be supplied as a one-time secret and removed afterward.
