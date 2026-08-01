@@ -2,8 +2,8 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": "vite",
   "installCommand": "npm ci --include=dev --workspace @sams/web",
-  "buildCommand": "npm run build -w @sams/web",
-  "outputDirectory": "apps/web/dist",
+  "buildCommand": "npm run build -w @sams/web -- --outDir ../../dist --emptyOutDir",
+  "outputDirectory": "dist",
   "routes": [
     {
       "src": "/api",

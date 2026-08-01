@@ -220,7 +220,7 @@ an auditable release and lets the normal CI/CD gates validate the rollback.
 ## Troubleshooting
 
 - **Vercel returns 404 on client routes:** confirm the repository-root `vercel.json`
-  was detected and the output directory is `apps/web/dist`.
+  was detected and the Vercel output directory is the repository-root `dist`.
 - **`API_ORIGIN` appears literally in a route:** add it to the Production environment
   of the matching Vercel project and redeploy.
 - **CORS blocked:** set Render `CORS_ORIGIN` to the exact Vercel origin, including
