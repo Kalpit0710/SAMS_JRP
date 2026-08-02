@@ -1,0 +1,19 @@
+{
+  "name": "SAMS - J. R. Preparatory School Attendance",
+  "short_name": "SAMS",
+  "description": "Secure bilingual school attendance with WhatsApp alerts and live reports.",
+  "lang": "en-IN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0c10",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

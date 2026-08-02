@@ -1,0 +1,15 @@
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /login
+Disallow: /dashboard
+Disallow: /attendance
+Disallow: /reports
+Disallow: /audit-logs
+Disallow: /manage
+Disallow: /alerts
+Disallow: /data
+Disallow: /settings
+Disallow: /forbidden
+
+Sitemap: https://sams-jrp-api-ecru.vercel.app/sitemap.xml
