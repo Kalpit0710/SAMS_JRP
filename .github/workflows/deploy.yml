@@ -1,4 +1,4 @@
-name: Deploy
+name: Deploy API
 
 on:
   workflow_run:
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy production
+    name: Deploy API production
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
@@ -27,9 +27,6 @@ jobs:
     timeout-minutes: 30
     environment:
       name: production
-    env:
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - name: Resolve release ref
         id: release
@@ -78,16 +75,6 @@ jobs:
           echo "Render did not become healthy on commit $DEPLOY_SHA" >&2
           exit 1
 
-      - name: Deploy web application to Vercel
-        id: vercel
-        shell: bash
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: |
-          deployment_url="$(npx --yes vercel@57.0.0 deploy --prod --yes --token="$VERCEL_TOKEN")"
-          echo "url=$deployment_url" >> "$GITHUB_OUTPUT"
-          echo "Vercel deployment: $deployment_url"
-
       - name: Verify public application
         shell: bash
         env:
@@ -106,12 +93,10 @@ jobs:
         shell: bash
         env:
           WEB_URL: ${{ vars.WEB_URL }}
-          VERCEL_DEPLOYMENT_URL: ${{ steps.vercel.outputs.url }}
         run: |
           {
             echo "## Deployment complete"
             echo ""
             echo "- Commit: \`$DEPLOY_SHA\`"
             echo "- Application: $WEB_URL"
-            echo "- Vercel deployment: $VERCEL_DEPLOYMENT_URL"
           } >> "$GITHUB_STEP_SUMMARY"

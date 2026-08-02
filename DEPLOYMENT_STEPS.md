@@ -13,9 +13,10 @@ Vercel reverse-proxies `/api/*` to Render by using `API_ORIGIN`. Browser request
 therefore remain same-origin, which is required for the HTTP-only refresh cookie.
 Do not change the web app to call an `onrender.com` URL directly.
 
-Render automatic deployments are disabled in `render.yaml`. GitHub Actions deploys
-an exact commit only after lint, build, tests, and the Docker build pass. Production
-uses a paid Render instance to avoid free-tier sleep and cold-start behavior.
+Vercel deploys the web application from `main` through its native Git integration.
+Render automatic deployments are disabled in `render.yaml`; GitHub Actions deploys
+the API at an exact commit only after lint, build, tests, and the Docker build pass.
+Production uses a paid Render instance to avoid free-tier sleep and cold-start behavior.
 
 ## 2. Prerequisites
 
@@ -70,7 +71,7 @@ checks before merge, and require pull requests.
   database password and a least-privilege user.
 5. Back up the production database before the first production deployment.
 
-## 5. Create the Vercel projects
+## 5. Create the Vercel project
 
 Create one Vercel project from the GitHub repository:
 
@@ -79,9 +80,8 @@ Create one Vercel project from the GitHub repository:
    the install command, web build command, output directory, SPA fallback, security
    headers, and API proxy.
 3. Record the project's stable Vercel URL.
-4. Disconnect Vercel's Git integration after project creation, or disable its automatic
-   Git deployments. GitHub Actions is the deployment owner and duplicate deploys should
-   not run in parallel.
+4. Keep Vercel's Git integration enabled. Vercel automatically deploys pushes to
+  `main` to production and pull requests to preview deployments.
 
 The API URL is not known yet. Add `API_ORIGIN` after creating the Render service.
 
@@ -122,7 +122,8 @@ Use the Render origin without a trailing slash:
 | --------------- | ------------------------ |
 | `sams-web-prod` | Production Render origin |
 
-The workflow runs `vercel deploy --prod` against this project after Render is healthy.
+Vercel reads this variable when creating each deployment. Redeploy production after
+adding or changing it.
 
 ## 8. Configure GitHub environments
 
@@ -137,9 +138,6 @@ Add these secrets to the environment:
 | Secret                   | Value                                     |
 | ------------------------ | ----------------------------------------- |
 | `RENDER_DEPLOY_HOOK_URL` | Render service Settings > Deploy Hook     |
-| `VERCEL_TOKEN`           | A scoped Vercel access token              |
-| `VERCEL_ORG_ID`          | Vercel account/team ID owning the project |
-| `VERCEL_PROJECT_ID`      | ID of the matching Vercel project         |
 
 Add these non-secret environment variables:
 
@@ -148,13 +146,11 @@ Add these non-secret environment variables:
 | `RENDER_API_URL` | Matching Render origin, no trailing slash     |
 | `WEB_URL`        | Matching stable Vercel URL, no trailing slash |
 
-Project and team IDs are shown in Vercel project settings and in the generated
-`.vercel/project.json` after linking a project locally. Do not commit `.vercel`.
-
 ## 9. Run the first deployments
 
-A successful CI run after a push to `main` starts the protected production deployment.
-The deployment job waits for the configured GitHub environment approval.
+A push to `main` starts the Vercel production deployment through its Git integration.
+After CI succeeds, GitHub Actions starts the protected Render deployment and waits for
+the configured GitHub environment approval.
 
 You can also run **Actions > Deploy > Run workflow**. Manual deployment resolves the
 current `main` tip and records its SHA.
@@ -163,8 +159,7 @@ The CD workflow performs these gates in order:
 
 1. Trigger Render with the exact commit SHA.
 2. Wait until `/api/health` is healthy and reports that SHA.
-3. Deploy the matching Vercel project.
-4. Check the public web URL and its proxied `/api/health` endpoint.
+3. Check the public Vercel URL and its proxied `/api/health` endpoint.
 
 ## 10. Initialize application credentials
 
@@ -220,7 +215,8 @@ an auditable release and lets the normal CI/CD gates validate the rollback.
 ## Troubleshooting
 
 - **Vercel returns 404 on client routes:** confirm the repository-root `vercel.json`
-  was detected and the Vercel output directory is the repository-root `dist`.
+  was detected, the project Root Directory is blank, and the output directory is
+  `apps/web/dist`.
 - **`API_ORIGIN` appears literally in a route:** add it to the Production environment
   of the matching Vercel project and redeploy.
 - **CORS blocked:** set Render `CORS_ORIGIN` to the exact Vercel origin, including
