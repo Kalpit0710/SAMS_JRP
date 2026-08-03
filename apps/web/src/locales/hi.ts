@@ -230,7 +230,8 @@ const hi = {
     errSaveRecord: "रिकॉर्ड सहेजने में विफल",
     errDeleteRecord: "रिकॉर्ड हटाने में विफल",
     errResetPin: "पिन रीसेट करने में विफल",
-    errPinLength: "पिन कम से कम 4 अक्षरों का होना चाहिए"
+    errPinLength: "पिन कम से कम 4 अंकों का होना चाहिए",
+    errPinDigits: "पिन में केवल अंक होने चाहिए"
   },
   alerts: {
     title: "व्हाट्सएप सूचनाएँ",
@@ -328,6 +329,17 @@ const hi = {
     pinMismatch: "दोनों नए पिन मेल नहीं खाते।",
     pinUpdated: "पिन अपडेट हुआ।",
     pinUpdateFailed: "पिन अपडेट करने में विफल",
+    pinDigitsOnly: "पिन में केवल अंक होने चाहिए।",
+    changePasswordTitle: "अपना पासवर्ड बदलें",
+    changePasswordDesc: "अपना मौजूदा पासवर्ड दर्ज करें, फिर नया पासवर्ड चुनें।",
+    currentPassword: "मौजूदा पासवर्ड",
+    newPassword: "नया पासवर्ड",
+    confirmPassword: "नए पासवर्ड की पुष्टि करें",
+    updatePassword: "पासवर्ड अपडेट करें",
+    passwordTooShort: "नया पासवर्ड कम से कम 4 अक्षरों का होना चाहिए।",
+    passwordMismatch: "दोनों नए पासवर्ड मेल नहीं खाते।",
+    passwordUpdated: "पासवर्ड अपडेट हुआ।",
+    passwordUpdateFailed: "पासवर्ड अपडेट करने में विफल",
     editWindowTitle: "उपस्थिति संपादन अवधि",
     editWindowDesc: "नियंत्रित करता है कि सबमिट करने के बाद शिक्षक कितने समय तक उपस्थिति सुधार सकता है।",
     locked: "लॉक",

@@ -112,6 +112,13 @@ describe("auth and reporting integration", () => {
     expect(blocked.status).toBe(403);
     expect(blocked.body.code).toBe("PASSWORD_CHANGE_REQUIRED");
 
+    const alphanumericPin = await agent
+      .post("/api/auth/change-password")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ currentPassword: "1234", newPassword: "abcd" });
+    expect(alphanumericPin.status).toBe(400);
+    expect(alphanumericPin.body.message).toBe("Teacher PIN must contain digits only");
+
     const changed = await agent
       .post("/api/auth/change-password")
       .set("Authorization", `Bearer ${accessToken}`)
@@ -122,6 +129,37 @@ describe("auth and reporting integration", () => {
       .get("/api/master-data/classes")
       .set("Authorization", `Bearer ${accessToken}`);
     expect(allowed.status).toBe(200);
+  });
+
+  it("allows administrators to change an alphanumeric password", async () => {
+    await UserModel.create({
+      fullName: "Password Admin",
+      username: "password.admin",
+      passwordHash: await hashPassword("Admin@12345"),
+      roles: ["admin"],
+      mustChangePassword: true,
+      isActive: true
+    });
+
+    const agent = request.agent(app);
+    const login = await agent.post("/api/auth/login").send({
+      username: "password.admin",
+      password: "Admin@12345"
+    });
+    expect(login.status).toBe(200);
+
+    const changed = await agent
+      .post("/api/auth/change-password")
+      .set("Authorization", `Bearer ${login.body.accessToken as string}`)
+      .send({ currentPassword: "Admin@12345", newPassword: "NewAdmin@6789" });
+    expect(changed.status).toBe(200);
+    expect(changed.body.message).toBe("Password updated");
+
+    const relogin = await request(app).post("/api/auth/login").send({
+      username: "password.admin",
+      password: "NewAdmin@6789"
+    });
+    expect(relogin.status).toBe(200);
   });
 
   it("scopes reporting for teachers and supports CSV export", async () => {

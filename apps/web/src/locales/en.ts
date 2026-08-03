@@ -230,7 +230,8 @@ const en = {
     errSaveRecord: "Failed to save record",
     errDeleteRecord: "Failed to delete record",
     errResetPin: "Failed to reset PIN",
-    errPinLength: "PIN must be at least 4 characters"
+    errPinLength: "PIN must be at least 4 digits",
+    errPinDigits: "PIN must contain digits only"
   },
   alerts: {
     title: "WhatsApp Alerts",
@@ -328,6 +329,17 @@ const en = {
     pinMismatch: "The two new PINs do not match.",
     pinUpdated: "PIN updated.",
     pinUpdateFailed: "Failed to update PIN",
+    pinDigitsOnly: "PIN must contain digits only.",
+    changePasswordTitle: "Change your password",
+    changePasswordDesc: "Enter your current password, then choose a new one.",
+    currentPassword: "Current password",
+    newPassword: "New password",
+    confirmPassword: "Confirm new password",
+    updatePassword: "Update password",
+    passwordTooShort: "New password must be at least 4 characters.",
+    passwordMismatch: "The two new passwords do not match.",
+    passwordUpdated: "Password updated.",
+    passwordUpdateFailed: "Failed to update password",
     editWindowTitle: "Attendance edit window",
     editWindowDesc: "Controls how long a teacher may correct attendance after submitting it.",
     locked: "Locked",

@@ -146,17 +146,22 @@ authRouter.post(
       return res.status(400).json({ message: "Invalid payload", errors: parsed.error.flatten() });
     }
 
-    if (parsed.data.currentPassword === parsed.data.newPassword) {
-      return res.status(400).json({ message: "The new PIN must be different from the current one" });
-    }
-
     const user = await UserModel.findById(req.auth?.userId);
     if (!user || !user.isActive) {
       return res.status(404).json({ message: "User not found" });
     }
 
+    if (parsed.data.currentPassword === parsed.data.newPassword) {
+      return res.status(400).json({ message: "The new password or PIN must be different from the current one" });
+    }
+
+    const usesTeacherPin = user.roles.includes("teacher") && !user.roles.includes("admin");
+    if (usesTeacherPin && !/^\d+$/.test(parsed.data.newPassword)) {
+      return res.status(400).json({ message: "Teacher PIN must contain digits only" });
+    }
+
     if (!(await verifyPassword(parsed.data.currentPassword, user.passwordHash))) {
-      return res.status(401).json({ message: "Current PIN is incorrect" });
+      return res.status(401).json({ message: "Current password or PIN is incorrect" });
     }
 
     user.passwordHash = await hashPassword(parsed.data.newPassword);
@@ -177,7 +182,7 @@ authRouter.post(
       role: req.auth?.activeRole
     });
 
-    return res.status(200).json({ message: "PIN updated" });
+    return res.status(200).json({ message: usesTeacherPin ? "PIN updated" : "Password updated" });
   })
 );
 

@@ -435,8 +435,13 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
       return;
     }
 
-    if (newPin.trim().length < 4) {
+    const normalizedPin = newPin.trim();
+    if (normalizedPin.length < 4) {
       setPinError(t("manage.errPinLength"));
+      return;
+    }
+    if (!/^\d+$/.test(normalizedPin)) {
+      setPinError(t("manage.errPinDigits"));
       return;
     }
 
@@ -449,7 +454,7 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ newPin: newPin.trim() })
+          body: JSON.stringify({ newPin: normalizedPin })
         }
       );
 
@@ -790,9 +795,10 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
                     autoComplete="off"
                     value={newPin}
                     minLength={4}
+                    maxLength={64}
                     required
                     placeholder={t("manage.pinPlaceholder")}
-                    onChange={(event) => setNewPin(event.target.value)}
+                    onChange={(event) => setNewPin(event.target.value.replace(/\D/g, ""))}
                   />
                   <p className="panel-subtitle">
                     {t("manage.resetPinHint")}

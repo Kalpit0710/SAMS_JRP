@@ -14,7 +14,7 @@ export const CreateTeacherSchema = z.object({
 });
 
 export const ResetPinSchema = z.object({
-  newPin: z.string().min(4).max(64)
+  newPin: z.string().min(4).max(64).regex(/^\d+$/, "PIN must contain digits only")
 });
 
 export const CreateStudentSchema = z.object({
