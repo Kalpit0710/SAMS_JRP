@@ -124,6 +124,13 @@ Useful API data commands:
 The import supports a destructive `--wipe` option. Back up the target database and
 verify both connection strings before using it.
 
+## Contribution workflow
+
+All changes follow the protected `feature/*` -> `dev` -> `main` pull request flow.
+Direct pushes to `dev` and `main` are blocked. See the
+[branching and pull request workflow](BRANCHING_WORKFLOW.md) before starting work or
+promoting a release.
+
 ## Deployment
 
 The primary hosted architecture uses Vercel for the React application and Render for
