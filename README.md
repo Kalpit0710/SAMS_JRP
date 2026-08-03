@@ -11,9 +11,12 @@ manage school data, review reports, configure attendance rules, and audit activi
 - Physical head-count confirmation before attendance submission
 - Configurable attendance edit window
 - Dashboard and class-level attendance analytics
+- Teacher leave applications with full, partial, or rejected admin decisions
+- School-working-day leave analytics with configurable weekly offs and holidays
 - CSV and PDF report exports
 - CSV import/export for school master data
 - Ready-to-send WhatsApp absence alerts using parent phone numbers
+- Optional WhatsApp handoffs for leave applications and decision confirmations
 - English and Hindi user interface
 - Audit logs and forced temporary-credential changes
 - Responsive layouts for phones, tablets, and desktop browsers
@@ -70,6 +73,7 @@ Edit `apps/api/.env` and set at least these values:
 MONGODB_URI=mongodb://127.0.0.1:27017/sams
 JWT_ACCESS_SECRET=<random-value-at-least-16-characters>
 JWT_REFRESH_SECRET=<different-random-value-at-least-16-characters>
+PUBLIC_APP_URL=http://127.0.0.1:5173
 ADMIN_INITIAL_PASSWORD=<unique-temporary-password-at-least-12-characters>
 ```
 

@@ -183,7 +183,8 @@ describe("auth and reporting integration", () => {
       attendanceDate: today,
       entries: [
         { studentId: studentA1._id, status: "present" },
-        { studentId: studentA2._id, status: "absent" }
+        { studentId: studentA2._id, status: "absent" },
+        { studentId: new mongoose.Types.ObjectId(), status: "absent" }
       ],
       submittedBy: admin._id,
       lastUpdatedBy: admin._id,
@@ -193,7 +194,7 @@ describe("auth and reporting integration", () => {
     await AttendanceModel.create({
       classId: classB._id,
       attendanceDate: today,
-      entries: [{ studentId: studentB1._id, status: "present" }],
+      entries: [{ studentId: studentB1._id, status: "absent" }],
       submittedBy: admin._id,
       lastUpdatedBy: admin._id,
       lockedAt: new Date(today.getTime() + 60 * 60 * 1000)
@@ -216,12 +217,37 @@ describe("auth and reporting integration", () => {
     expect(overview.status).toBe(200);
     expect(overview.body.totals.students).toBe(2);
     expect(overview.body.totals.classes).toBe(1);
+    expect(overview.body.absenceInsights.byClass).toEqual([
+      expect.objectContaining({
+        className: "Class 7",
+        students: [expect.objectContaining({ studentName: "Student A2", absenceCount: 1 })]
+      })
+    ]);
+    expect(JSON.stringify(overview.body.absenceInsights)).not.toContain("Unknown");
+    expect(overview.body.absenceInsights).not.toHaveProperty("schoolTop");
 
     const deniedClassQuery = await agent
       .get(`/api/reports/overview?days=30&classId=${classB.id}`)
       .set("Authorization", `Bearer ${accessToken}`);
 
     expect(deniedClassQuery.status).toBe(403);
+
+    const adminAgent = request.agent(app);
+    const adminLogin = await adminAgent.post("/api/auth/login").send({
+      username: "admin.reporting",
+      password: "Admin@12345"
+    });
+    const adminOverview = await adminAgent
+      .get(`/api/reports/overview?days=30&classId=${classA.id}`)
+      .set("Authorization", `Bearer ${adminLogin.body.accessToken as string}`);
+
+    expect(adminOverview.status).toBe(200);
+    expect(adminOverview.body.absenceInsights.byClass).toHaveLength(1);
+    expect(adminOverview.body.absenceInsights.byClass[0].className).toBe("Class 7");
+    expect(adminOverview.body.absenceInsights.schoolTop).toEqual([
+      expect.objectContaining({ studentName: "Student A2", className: "Class 7", absenceCount: 1 }),
+      expect.objectContaining({ studentName: "Student B1", className: "Class 8", absenceCount: 1 })
+    ]);
 
     const csvExport = await agent
       .get("/api/reports/export?format=csv")

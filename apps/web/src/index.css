@@ -694,6 +694,157 @@ input:focus {
   width: 100%;
 }
 
+.absence-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.insights-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.insights-heading h2 {
+  margin: 0.3rem 0 0;
+  font-size: 1.25rem;
+}
+
+.insights-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--danger);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.absence-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 1rem;
+}
+
+.absence-insight-panel {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.absence-insight-panel.school-wide {
+  border-top: 3px solid var(--danger);
+}
+
+.absence-panel-header {
+  min-height: 76px;
+  padding: 1rem 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.absence-panel-header h3 {
+  margin: 0.2rem 0 0;
+  font-size: 1rem;
+}
+
+.absence-panel-scope {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.absence-scope-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.12);
+  border-radius: 8px;
+}
+
+.absence-ranking {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.absence-ranking li {
+  min-height: 64px;
+  padding: 0.75rem 1.1rem;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.absence-ranking li:last-child {
+  border-bottom: 0;
+}
+
+.rank-number {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.rank-student {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.rank-student strong,
+.rank-student small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rank-student strong {
+  font-size: 0.86rem;
+}
+
+.rank-student small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.absence-count {
+  color: var(--danger);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.absence-ranking .absence-empty {
+  display: flex;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 /* Table Area */
 .table-panel {
   background: var(--bg-panel);
@@ -806,6 +957,151 @@ input:focus {
 .status-badge.late { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
 .status-badge.half_day { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
 .status-badge.default { background: rgba(107, 114, 128, 0.15); color: var(--text-secondary); }
+.status-badge.leave-pending { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+.status-badge.leave-approved { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+.status-badge.leave-partially_approved { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.status-badge.leave-rejected { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+.status-badge.leave-withdrawn { background: rgba(107, 114, 128, 0.15); color: var(--text-secondary); }
+
+.leave-page,
+.leave-analytics-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.leave-application-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 220px) minmax(160px, 220px) minmax(260px, 1fr) auto;
+  gap: 1rem;
+  align-items: end;
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+
+.leave-application-form textarea,
+.leave-decision-form textarea {
+  min-height: 42px;
+  resize: vertical;
+}
+
+.leave-date-control {
+  position: relative;
+  width: 100%;
+}
+
+.leave-date-control > input[type="text"] {
+  padding-right: 3rem;
+}
+
+.leave-date-picker-btn {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: grid;
+  width: 42px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border-light);
+  border-radius: 0 9px 9px 0;
+  cursor: pointer;
+}
+
+.leave-date-picker-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+}
+
+.leave-date-picker-btn:focus-visible {
+  color: var(--accent-primary);
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
+.leave-date-control .leave-native-date-picker {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  min-width: 0;
+  height: 1px;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.leave-reason-cell {
+  max-width: 320px;
+  white-space: normal;
+}
+
+.leave-list-filters {
+  flex-wrap: wrap;
+}
+
+.leave-list-filters .form-field {
+  min-width: 150px;
+}
+
+.leave-cell-subtitle {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+}
+
+.leave-detail-list {
+  display: grid;
+  gap: 0.8rem;
+  margin: 0;
+}
+
+.leave-detail-list > div {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.4fr) minmax(0, 1fr);
+  gap: 1rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.leave-detail-list dt { color: var(--text-muted); }
+.leave-detail-list dd { margin: 0; overflow-wrap: anywhere; }
+.leave-decision-form { display: grid; gap: 1rem; margin-top: 1.25rem; }
+.leave-decision-form .manage-tabs { margin-bottom: 0; }
+.whatsapp-btn { background: #128c4a; }
+.leave-row-actions {
+  flex-wrap: nowrap;
+  min-width: max-content;
+}
+.whatsapp-inline-btn {
+  min-height: 34px;
+  padding: 0.4rem 0.65rem;
+  color: #42d77d;
+  border-color: color-mix(in srgb, #25d366 45%, var(--border));
+  white-space: nowrap;
+}
+.whatsapp-inline-btn:hover {
+  color: #d9ffe7;
+  background: color-mix(in srgb, #128c4a 28%, transparent);
+  border-color: #25d366;
+}
+.danger-text { color: var(--danger); }
+.leave-stat-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+@media (max-width: 1024px) {
+  .leave-application-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .leave-reason { grid-column: 1 / -1; }
+}
+
+@media (max-width: 640px) {
+  .leave-application-form,
+  .leave-stat-grid { grid-template-columns: 1fr; }
+  .leave-detail-list > div { grid-template-columns: 1fr; gap: 0.35rem; }
+  .leave-detail-modal .modal-footer { flex-direction: column; }
+  .leave-detail-modal .modal-footer button { width: 100%; justify-content: center; }
+}
 
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
@@ -880,6 +1176,12 @@ input:focus {
   gap: 0.5rem;
   font-size: 0.85rem;
   color: var(--text-secondary);
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .login-card input {
@@ -1441,6 +1743,43 @@ input:focus {
   border-color: var(--accent-primary);
 }
 
+.password-input-control {
+  position: relative;
+  width: 100%;
+}
+
+.password-input-control > input {
+  padding-right: 3rem;
+}
+
+.password-visibility-btn {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: grid;
+  width: 42px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border-light);
+  border-radius: 0 7px 7px 0;
+  cursor: pointer;
+}
+
+.password-visibility-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+}
+
+.password-visibility-btn:focus-visible {
+  color: var(--accent-primary);
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
+}
+
 .checkbox-row {
   display: flex;
   /* .checkbox-row is a <label>, so undo the column/uppercase from the global label rule. */
@@ -1519,6 +1858,78 @@ input:focus {
 
 .settings-form .primary-btn {
   align-self: flex-start;
+}
+
+.settings-leave-panel {
+  grid-column: 1 / -1;
+}
+
+.leave-settings-form {
+  align-items: stretch;
+}
+
+.leave-settings-form > .form-field {
+  max-width: 440px;
+}
+
+.leave-settings-form .form-field label svg {
+  flex-shrink: 0;
+}
+
+.leave-weekdays {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.leave-weekdays legend,
+.leave-holidays h3 {
+  margin: 0 0 0.7rem;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.leave-weekday-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem 1.25rem;
+}
+
+.leave-holidays {
+  display: grid;
+  gap: 0.8rem;
+}
+
+.leave-holidays-header,
+.leave-holiday-row {
+  display: grid;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.leave-holidays-header {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.leave-holidays-header h3 {
+  margin-bottom: 0.25rem;
+}
+
+.leave-holiday-row {
+  grid-template-columns: minmax(150px, 200px) minmax(220px, 1fr) 36px;
+}
+
+.leave-holiday-row .form-field {
+  max-width: none;
+}
+
+.leave-holiday-row .icon-btn {
+  width: 36px;
+  height: 36px;
 }
 
 .locked-badge {
@@ -2686,6 +3097,15 @@ input:focus {
     width: 100%;
   }
 
+  .insights-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .absence-ranking li {
+    padding-inline: 0.85rem;
+  }
+
   .alert-filters {
     width: 100%;
     max-width: 100%;
@@ -2784,6 +3204,10 @@ input:focus {
   }
 
   .status-actions {
+  .leave-holidays-header,
+  .leave-holiday-row { grid-template-columns: 1fr; align-items: stretch; }
+  .leave-holidays-header .ghost-btn { width: 100%; justify-content: center; }
+  .leave-holiday-row .icon-btn { justify-self: end; }
     grid-template-columns: repeat(auto-fit, minmax(60px, 1fr));
   }
 
