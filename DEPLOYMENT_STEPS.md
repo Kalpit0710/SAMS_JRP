@@ -141,9 +141,13 @@ when your GitHub plan supports it.
 
 Add these secrets to the environment:
 
-| Secret                   | Value                                     |
-| ------------------------ | ----------------------------------------- |
-| `RENDER_DEPLOY_HOOK_URL` | Render service Settings > Deploy Hook     |
+| Secret                   | Value                                      |
+| ------------------------ | ------------------------------------------ |
+| `RENDER_DEPLOY_HOOK_URL` | Raw URL from Render Settings > Deploy Hook |
+
+For `RENDER_DEPLOY_HOOK_URL`, paste only the URL beginning with
+`https://api.render.com/deploy/`. Do not include the secret name, surrounding
+quotes, or a `curl` command.
 
 Add these non-secret environment variables:
 

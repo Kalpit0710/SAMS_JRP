@@ -52,6 +52,9 @@ type EntityConfig = {
   fields: FieldConfig[];
 };
 
+type SortKey = "name" | "class" | "rollNumber" | "regNo";
+type SortDirection = "asc" | "desc";
+
 type ListResponse = {
   items: Record<string, unknown>[];
   total: number;
@@ -87,6 +90,35 @@ function lookupLabel(lookups: Lookups, source: RefSource, value: unknown): strin
   }
 
   return lookups[source].find((item) => item._id === id)?.label ?? "—";
+}
+
+function searchableValues(row: Record<string, unknown>, entity: EntityKey, lookups: Lookups): string[] {
+  const className = lookupLabel(lookups, "classes", row.classId);
+  if (entity === "students") {
+    return [
+      row.regNo,
+      row.fullName,
+      row.rollNumber,
+      row.fatherName,
+      row.motherName,
+      row.phoneNumber,
+      className
+    ].map(textOf);
+  }
+  if (entity === "teachers") {
+    return [row.fullName, row.phoneNumber, className].map(textOf);
+  }
+  return [row.name].map(textOf);
+}
+
+function sortValue(row: Record<string, unknown>, key: SortKey, lookups: Lookups): string {
+  if (key === "class") {
+    return lookupLabel(lookups, "classes", row.classId);
+  }
+  if (key === "name") {
+    return textOf(row.fullName ?? row.name);
+  }
+  return textOf(row[key]);
 }
 
 function boolBadge(value: unknown, trueLabel: string, falseLabel: string) {
@@ -245,6 +277,9 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
   const [page, setPage] = useState(1);
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+  const [sortKey, setSortKey] = useState<SortKey>("name");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -265,6 +300,23 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
     () => configs.find((item) => item.key === activeKey) ?? configs[0],
     [configs, activeKey]
   );
+  const sortOptions = useMemo(() => {
+    if (activeKey === "students") {
+      return [
+        { value: "name", label: t("manage.sortName") },
+        { value: "class", label: t("manage.sortClass") },
+        { value: "rollNumber", label: t("manage.sortRollNumber") },
+        { value: "regNo", label: t("manage.sortRegNo") }
+      ];
+    }
+    if (activeKey === "teachers") {
+      return [
+        { value: "name", label: t("manage.sortName") },
+        { value: "class", label: t("manage.sortClass") }
+      ];
+    }
+    return [{ value: "name", label: t("manage.sortName") }];
+  }, [activeKey, t]);
 
   const loadLookups = useCallback(async () => {
     try {
@@ -286,22 +338,47 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
     setError(null);
 
     try {
-      const params = new URLSearchParams({ page: String(page), pageSize: String(PAGE_SIZE) });
-      if (search) {
-        params.set("search", search);
-      }
-
-      const result = await requestWithAuth<ListResponse>(`${config.path}?${params.toString()}`, { method: "GET" });
+      const result = await requestWithAuth<ListResponse>(config.path, { method: "GET" });
       setRows(result.items ?? []);
-      setTotal(result.total ?? 0);
-      setTotalPages(result.totalPages ?? 1);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : t("manage.errLoadRecords"));
       setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [config.path, page, requestWithAuth, search, t]);
+  }, [config.path, requestWithAuth, t]);
+
+  const filteredRows = useMemo(() => {
+    const normalizedSearch = search.toLocaleLowerCase();
+    const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+    const result = rows.filter((row) => {
+      if (classFilter && textOf(row.classId) !== classFilter) {
+        return false;
+      }
+      return !normalizedSearch || searchableValues(row, activeKey, lookups)
+        .some((value) => value.toLocaleLowerCase().includes(normalizedSearch));
+    });
+
+    return result.sort((left, right) => {
+      const comparison = collator.compare(sortValue(left, sortKey, lookups), sortValue(right, sortKey, lookups));
+      if (comparison !== 0) {
+        return sortDirection === "asc" ? comparison : -comparison;
+      }
+      return collator.compare(textOf(left.fullName ?? left.name), textOf(right.fullName ?? right.name));
+    });
+  }, [activeKey, classFilter, lookups, rows, search, sortDirection, sortKey]);
+
+  const visibleRows = useMemo(
+    () => filteredRows.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [filteredRows, page]
+  );
+
+  useEffect(() => {
+    setTotal(filteredRows.length);
+    const nextTotalPages = Math.max(1, Math.ceil(filteredRows.length / PAGE_SIZE));
+    setTotalPages(nextTotalPages);
+    setPage((current) => Math.min(current, nextTotalPages));
+  }, [filteredRows]);
 
   useEffect(() => {
     void loadLookups();
@@ -325,6 +402,9 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
     setPage(1);
     setSearchInput("");
     setSearch("");
+    setClassFilter("");
+    setSortKey("name");
+    setSortDirection("asc");
     setNotice(null);
     setError(null);
     setPendingDeleteId(null);
@@ -435,8 +515,13 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
       return;
     }
 
-    if (newPin.trim().length < 4) {
+    const normalizedPin = newPin.trim();
+    if (normalizedPin.length < 4) {
       setPinError(t("manage.errPinLength"));
+      return;
+    }
+    if (!/^\d+$/.test(normalizedPin)) {
+      setPinError(t("manage.errPinDigits"));
       return;
     }
 
@@ -449,7 +534,7 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ newPin: newPin.trim() })
+          body: JSON.stringify({ newPin: normalizedPin })
         }
       );
 
@@ -507,6 +592,41 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
                 onChange={(event) => setSearchInput(event.target.value)}
               />
             </div>
+            {activeKey !== "classes" ? (
+              <label className="master-data-control">
+                <span>{t("manage.filterClass")}</span>
+                <select
+                  value={classFilter}
+                  onChange={(event) => { setClassFilter(event.target.value); setPage(1); }}
+                >
+                  <option value="">{t("manage.allClasses")}</option>
+                  {lookups.classes.map((item) => (
+                    <option key={item._id} value={item._id}>{item.label}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <label className="master-data-control">
+              <span>{t("manage.sortBy")}</span>
+              <select
+                value={sortKey}
+                onChange={(event) => { setSortKey(event.target.value as SortKey); setPage(1); }}
+              >
+                {sortOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="master-data-control">
+              <span>{t("manage.sortDirection")}</span>
+              <select
+                value={sortDirection}
+                onChange={(event) => { setSortDirection(event.target.value as SortDirection); setPage(1); }}
+              >
+                <option value="asc">{t("manage.ascending")}</option>
+                <option value="desc">{t("manage.descending")}</option>
+              </select>
+            </label>
             {canEdit ? (
               <button type="button" className="primary-btn" onClick={openCreate}>
                 <Plus size={16} />
@@ -536,18 +656,20 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
                     <InlineLoader label={t("manage.loading")} />
                   </td>
                 </tr>
-              ) : rows.length === 0 ? (
+              ) : visibleRows.length === 0 ? (
                 <tr>
                   <td colSpan={config.columns.length + 1}>
                     <div className="empty-state">
                       {search
                         ? t("manage.emptyStateSearch", { entity: config.label.toLowerCase(), search })
-                        : t("manage.emptyState", { entity: config.label.toLowerCase() })}
+                        : classFilter
+                          ? t("manage.emptyStateFiltered", { entity: config.label.toLowerCase() })
+                          : t("manage.emptyState", { entity: config.label.toLowerCase() })}
                     </div>
                   </td>
                 </tr>
               ) : (
-                rows.map((row) => {
+                visibleRows.map((row) => {
                   const rowId = idOf(row);
                   return (
                     <tr key={rowId}>
@@ -790,9 +912,10 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
                     autoComplete="off"
                     value={newPin}
                     minLength={4}
+                    maxLength={64}
                     required
                     placeholder={t("manage.pinPlaceholder")}
-                    onChange={(event) => setNewPin(event.target.value)}
+                    onChange={(event) => setNewPin(event.target.value.replace(/\D/g, ""))}
                   />
                   <p className="panel-subtitle">
                     {t("manage.resetPinHint")}

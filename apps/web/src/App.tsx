@@ -1947,6 +1947,7 @@ function App() {
                 <SettingsPage
                   requestWithAuth={requestWithAuth}
                   canEdit={canEditMasterData}
+                  credentialType={session.user.roles.includes("admin") ? "password" : "pin"}
                   forcePasswordChange={session.user.mustChangePassword}
                   onPasswordChanged={() => {
                     persistSession({

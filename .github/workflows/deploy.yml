@@ -54,7 +54,14 @@ jobs:
         shell: bash
         env:
           RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
-        run: curl --fail --show-error --silent --request POST "${RENDER_DEPLOY_HOOK_URL}&ref=${DEPLOY_SHA}"
+        run: |
+          hook_url="${RENDER_DEPLOY_HOOK_URL//$'\r'/}"
+          hook_url="${hook_url//$'\n'/}"
+          if [[ ! "$hook_url" =~ ^https://api\.render\.com/deploy/[^[:space:]]+$ ]]; then
+            echo "RENDER_DEPLOY_HOOK_URL must contain only the HTTPS deploy hook URL copied from Render (no variable name, quotes, or curl command)." >&2
+            exit 1
+          fi
+          curl --fail --show-error --silent --request POST --url-query "ref=$DEPLOY_SHA" "$hook_url"
 
       - name: Wait for the Render release
         shell: bash

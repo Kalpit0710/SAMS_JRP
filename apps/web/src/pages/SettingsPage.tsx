@@ -56,16 +56,44 @@ function describeLock(minutes: number, t: TFunction): string {
 export function SettingsPage({
   requestWithAuth,
   canEdit,
+  credentialType,
   forcePasswordChange = false,
   onPasswordChanged
 }: {
   requestWithAuth: SettingsRequest;
   canEdit: boolean;
+  credentialType: "password" | "pin";
   forcePasswordChange?: boolean;
   onPasswordChanged?: () => void;
 }) {
   const { t } = useTranslation();
   const toast = useToast();
+  const usesPin = credentialType === "pin";
+  const credentialCopy = usesPin
+    ? {
+        title: t("settings.changePinTitle"),
+        description: t("settings.changePinDesc"),
+        current: t("settings.currentPin"),
+        next: t("settings.newPin"),
+        confirm: t("settings.confirmPin"),
+        update: t("settings.updatePin"),
+        tooShort: t("settings.pinTooShort"),
+        mismatch: t("settings.pinMismatch"),
+        updated: t("settings.pinUpdated"),
+        updateFailed: t("settings.pinUpdateFailed")
+      }
+    : {
+        title: t("settings.changePasswordTitle"),
+        description: t("settings.changePasswordDesc"),
+        current: t("settings.currentPassword"),
+        next: t("settings.newPassword"),
+        confirm: t("settings.confirmPassword"),
+        update: t("settings.updatePassword"),
+        tooShort: t("settings.passwordTooShort"),
+        mismatch: t("settings.passwordMismatch"),
+        updated: t("settings.passwordUpdated"),
+        updateFailed: t("settings.passwordUpdateFailed")
+      };
   const [lockMinutes, setLockMinutes] = useState(60);
   const [savedMinutes, setSavedMinutes] = useState(60);
   const [loading, setLoading] = useState(true);
@@ -96,11 +124,15 @@ export function SettingsPage({
     setPinNotice(null);
 
     if (newPin.length < 4) {
-      setPinError(t("settings.pinTooShort"));
+      setPinError(credentialCopy.tooShort);
+      return;
+    }
+    if (usesPin && !/^\d+$/.test(newPin)) {
+      setPinError(t("settings.pinDigitsOnly"));
       return;
     }
     if (newPin !== confirmPin) {
-      setPinError(t("settings.pinMismatch"));
+      setPinError(credentialCopy.mismatch);
       return;
     }
 
@@ -116,11 +148,11 @@ export function SettingsPage({
       setCurrentPin("");
       setNewPin("");
       setConfirmPin("");
-      setPinNotice(t("settings.pinUpdated"));
-      toast.success(t("settings.pinUpdated"));
+      setPinNotice(credentialCopy.updated);
+      toast.success(credentialCopy.updated);
       onPasswordChanged?.();
     } catch (changeError) {
-      const message = changeError instanceof Error ? changeError.message : t("settings.pinUpdateFailed");
+      const message = changeError instanceof Error ? changeError.message : credentialCopy.updateFailed;
       setPinError(message);
       toast.error(message);
     } finally {
@@ -285,47 +317,50 @@ export function SettingsPage({
           <div className="table-header">
             <div>
               <h2 className="panel-title">
-                <KeyRound size={16} /> {t("settings.changePinTitle")}
+                <KeyRound size={16} /> {credentialCopy.title}
               </h2>
-              <p className="panel-subtitle">{t("settings.changePinDesc")}</p>
+              <p className="panel-subtitle">{credentialCopy.description}</p>
             </div>
           </div>
           <div className="settings-body">
             {forcePasswordChange ? <p className="locked-note">{t("settings.passwordChangeRequired")}</p> : null}
             <form className="settings-form" onSubmit={changePin}>
               <div className="form-field">
-                <label htmlFor="current-pin">{t("settings.currentPin")}</label>
+                <label htmlFor="current-pin">{credentialCopy.current}</label>
                 <PasswordInput
                   id="current-pin"
                   autoComplete="current-password"
-                  inputMode="numeric"
+                  inputMode={usesPin ? "numeric" : "text"}
                   value={currentPin}
+                  maxLength={64}
                   required
-                  onChange={(event) => setCurrentPin(event.target.value)}
+                  onChange={(event) => setCurrentPin(usesPin ? event.target.value.replace(/\D/g, "") : event.target.value)}
                 />
               </div>
               <div className="form-field">
-                <label htmlFor="new-pin">{t("settings.newPin")}</label>
+                <label htmlFor="new-pin">{credentialCopy.next}</label>
                 <PasswordInput
                   id="new-pin"
                   autoComplete="new-password"
-                  inputMode="numeric"
+                  inputMode={usesPin ? "numeric" : "text"}
                   value={newPin}
                   minLength={4}
+                  maxLength={64}
                   required
-                  onChange={(event) => setNewPin(event.target.value)}
+                  onChange={(event) => setNewPin(usesPin ? event.target.value.replace(/\D/g, "") : event.target.value)}
                 />
               </div>
               <div className="form-field">
-                <label htmlFor="confirm-pin">{t("settings.confirmPin")}</label>
+                <label htmlFor="confirm-pin">{credentialCopy.confirm}</label>
                 <PasswordInput
                   id="confirm-pin"
                   autoComplete="new-password"
-                  inputMode="numeric"
+                  inputMode={usesPin ? "numeric" : "text"}
                   value={confirmPin}
                   minLength={4}
+                  maxLength={64}
                   required
-                  onChange={(event) => setConfirmPin(event.target.value)}
+                  onChange={(event) => setConfirmPin(usesPin ? event.target.value.replace(/\D/g, "") : event.target.value)}
                 />
               </div>
 
@@ -333,12 +368,10 @@ export function SettingsPage({
               {pinNotice ? <p className="success-text">{pinNotice}</p> : null}
 
               <button type="submit" className="primary-btn" disabled={pinSaving}>
-                {pinSaving ? t("settings.updating") : t("settings.updatePin")}
+                {pinSaving ? t("settings.updating") : credentialCopy.update}
               </button>
             </form>
-            <p className="policy-hint">
-              {t("settings.forgotPin")}
-            </p>
+            {usesPin ? <p className="policy-hint">{t("settings.forgotPin")}</p> : null}
           </div>
         </section>
 
