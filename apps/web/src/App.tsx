@@ -10,10 +10,11 @@ import {
   Activity, CheckCircle, ChevronRight, ChevronsLeft, ChevronsRight, Clock,
   LayoutDashboard, LayoutGrid, List, LogOut, MoreHorizontal, Rows3, Settings, ShieldAlert,
   Sun, Users, CheckSquare, AlertTriangle, AlertCircle, BarChart as BarChartIcon,
-  Database, MessageCircle, FileSpreadsheet, X
+  Database, MessageCircle, FileSpreadsheet, UserX, X
 } from "lucide-react";
 import { setLanguage } from "./i18n";
 import { PageLoader, InlineLoader } from "./components/Loader";
+import { PasswordInput } from "./components/PasswordInput";
 import { ATTENDANCE_VIEW_MODE_KEY, DEFAULT_REPORT_DAYS_KEY } from "./lib/preferences";
 import { useToast } from "./lib/toast";
 import DataTransferPage from "./pages/DataTransferPage";
@@ -83,6 +84,21 @@ type ReportClassHealth = {
   rate: number;
 };
 
+type AbsenceInsightStudent = {
+  studentId: string;
+  studentName: string;
+  rollNumber?: string;
+  classId: string;
+  className: string;
+  absenceCount: number;
+};
+
+type ClassAbsenceInsight = {
+  classId: string;
+  className: string;
+  students: AbsenceInsightStudent[];
+};
+
 type ReportOverview = {
   generatedAt: string;
   totals: {
@@ -97,6 +113,10 @@ type ReportOverview = {
   trend: ReportTrendItem[];
   statusBreakdown: ReportStatusItem[];
   classHealth: ReportClassHealth[];
+  absenceInsights: {
+    byClass: ClassAbsenceInsight[];
+    schoolTop?: AbsenceInsightStudent[];
+  };
 };
 
 type TimelineItem = {
@@ -193,6 +213,29 @@ function getErrorMessage(error: unknown): string {
   return "Unexpected error";
 }
 
+function toSessionState(value: unknown): SessionState {
+  if (!value || typeof value !== "object") {
+    throw new Error("Invalid session response");
+  }
+
+  const candidate = value as { user?: Partial<SessionUser>; accessToken?: unknown };
+  const role = candidate.user?.activeRole;
+  if (
+    typeof candidate.accessToken !== "string"
+    || !candidate.user
+    || typeof candidate.user.id !== "string"
+    || typeof candidate.user.fullName !== "string"
+    || typeof candidate.user.username !== "string"
+    || !Array.isArray(candidate.user.roles)
+    || (role !== "admin" && role !== "teacher")
+    || typeof candidate.user.mustChangePassword !== "boolean"
+  ) {
+    throw new Error("Invalid session response");
+  }
+
+  return value as SessionState;
+}
+
 function formatShortDate(isoDate: string, language: string): string {
   return new Date(`${isoDate}T00:00:00`).toLocaleDateString(language === "hi" ? "hi-IN" : "en-GB", {
     day: "numeric",
@@ -240,7 +283,7 @@ function RoleGuard({ role, allow, fallbackPath = "/forbidden", children }: RoleG
   return children;
 }
 
-function Dashboard({ requestWithAuth }: { role: UiRole; requestWithAuth: RequestWithAuth }) {
+function Dashboard({ role, requestWithAuth }: { role: UiRole; requestWithAuth: RequestWithAuth }) {
   const { t, i18n } = useTranslation();
   const toast = useToast();
   const [report, setReport] = useState<ReportOverview | null>(null);
@@ -483,6 +526,79 @@ function Dashboard({ requestWithAuth }: { role: UiRole; requestWithAuth: Request
           </div>
         </article>
       </div>
+
+      <section className="absence-insights" aria-labelledby="absence-insights-title">
+        <div className="insights-heading">
+          <div>
+            <span className="insights-kicker"><UserX size={15} /> {t("dashboard.attentionNeeded")}</span>
+            <h2 id="absence-insights-title">{t("dashboard.mostAbsentStudents")}</h2>
+          </div>
+          <span className="panel-subtitle">{t("dashboard.lastDays", { count: filterDays })}</span>
+        </div>
+
+        <div className="absence-insight-grid">
+          {role === "admin" ? (
+            <article className="absence-insight-panel school-wide">
+              <div className="absence-panel-header">
+                <div>
+                  <span className="absence-panel-scope">{t("dashboard.wholeSchool")}</span>
+                  <h3>{t("dashboard.schoolTopThree")}</h3>
+                </div>
+                <span className="absence-scope-icon"><Users size={18} /></span>
+              </div>
+              <ol className="absence-ranking">
+                {(report?.absenceInsights.schoolTop ?? []).map((student, index) => (
+                  <li key={student.studentId}>
+                    <span className="rank-number">{index + 1}</span>
+                    <span className="rank-student">
+                      <strong>{student.studentName}</strong>
+                      <small>{student.className}{student.rollNumber ? ` · ${t("dashboard.rollNumber", { number: student.rollNumber })}` : ""}</small>
+                    </span>
+                    <span className="absence-count">{t("dashboard.absentDays", { count: student.absenceCount })}</span>
+                  </li>
+                ))}
+                {(report?.absenceInsights.schoolTop ?? []).length === 0 ? (
+                  <li className="absence-empty">{t("dashboard.noAbsences")}</li>
+                ) : null}
+              </ol>
+            </article>
+          ) : null}
+
+          {(report?.absenceInsights.byClass ?? []).map((classInsight) => (
+            <article className="absence-insight-panel" key={classInsight.classId}>
+              <div className="absence-panel-header">
+                <div>
+                  <span className="absence-panel-scope">{t("dashboard.classTopThree")}</span>
+                  <h3>{classInsight.className}</h3>
+                </div>
+                <span className="absence-scope-icon"><UserX size={18} /></span>
+              </div>
+              <ol className="absence-ranking">
+                {classInsight.students.map((student, index) => (
+                  <li key={student.studentId}>
+                    <span className="rank-number">{index + 1}</span>
+                    <span className="rank-student">
+                      <strong>{student.studentName}</strong>
+                      {student.rollNumber ? <small>{t("dashboard.rollNumber", { number: student.rollNumber })}</small> : null}
+                    </span>
+                    <span className="absence-count">{t("dashboard.absentDays", { count: student.absenceCount })}</span>
+                  </li>
+                ))}
+                {classInsight.students.length === 0 ? (
+                  <li className="absence-empty">{t("dashboard.noAbsences")}</li>
+                ) : null}
+              </ol>
+            </article>
+          ))}
+          {role === "teacher" && (report?.absenceInsights.byClass ?? []).length === 0 ? (
+            <article className="absence-insight-panel">
+              <ol className="absence-ranking">
+                <li className="absence-empty">{t("dashboard.noAbsences")}</li>
+              </ol>
+            </article>
+          ) : null}
+        </div>
+      </section>
 
       <article className="table-panel">
         <div className="table-header">
@@ -1386,15 +1502,15 @@ function LoginPage({ onLogin, pending, error }: { onLogin: (username: string, pa
           {t("auth.username")}
           <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
         </label>
-        <label>
-          {t("auth.password")}
-          <input
+        <div className="login-field">
+          <label htmlFor="login-password">{t("auth.password")}</label>
+          <PasswordInput
+            id="login-password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             autoComplete="current-password"
-            type="password"
           />
-        </label>
+        </div>
         <button className="primary-btn" type="submit" disabled={pending}>
           {pending ? t("auth.signingIn") : t("auth.signIn")}
         </button>
@@ -1438,7 +1554,7 @@ function App() {
       const currentRole = session?.user.activeRole;
       const payload = currentRole ? { activeRole: currentRole } : {};
 
-      const refreshed = await apiRequest<{ user: SessionUser; accessToken: string }>(
+      const refreshed = await apiRequest<unknown>(
         "/auth/refresh",
         {
           method: "POST",
@@ -1446,10 +1562,7 @@ function App() {
         }
       );
 
-      const nextSession: SessionState = {
-        user: refreshed.user,
-        accessToken: refreshed.accessToken
-      };
+      const nextSession = toSessionState(refreshed);
 
       persistSession(nextSession);
       return nextSession;
@@ -1511,12 +1624,12 @@ function App() {
     setLoginPending(true);
 
     try {
-      const result = await apiRequest<{ user: SessionUser; accessToken: string }>("/auth/login", {
+      const result = toSessionState(await apiRequest<unknown>("/auth/login", {
         method: "POST",
         body: JSON.stringify({ username, password })
-      });
+      }));
 
-      persistSession({ user: result.user, accessToken: result.accessToken });
+      persistSession(result);
     } catch (error) {
       const messageText = getErrorMessage(error);
       setLoginError(messageText);
@@ -1543,12 +1656,12 @@ function App() {
     }
 
     try {
-      const result = await requestWithAuth<{ user: SessionUser; accessToken: string }>("/auth/switch-role", {
+      const result = toSessionState(await requestWithAuth<unknown>("/auth/switch-role", {
         method: "POST",
         body: JSON.stringify({ activeRole: nextRole })
-      });
+      }));
 
-      persistSession({ user: result.user, accessToken: result.accessToken });
+      persistSession(result);
     } catch (error) {
       setLoginError(getErrorMessage(error));
     }

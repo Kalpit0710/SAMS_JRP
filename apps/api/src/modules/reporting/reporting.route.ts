@@ -23,6 +23,20 @@ const ATTENDANCE_STATUSES = [
 type AttendanceStatusKey = (typeof ATTENDANCE_STATUSES)[number];
 type StatusCounts = Record<AttendanceStatusKey, number>;
 
+type ClassAbsenceRow = {
+  _id: {
+    classId: mongoose.Types.ObjectId;
+    studentId: mongoose.Types.ObjectId;
+  };
+  absenceCount: number;
+};
+
+type SchoolAbsenceRow = {
+  _id: mongoose.Types.ObjectId;
+  classId: mongoose.Types.ObjectId;
+  absenceCount: number;
+};
+
 function emptyStatusCounts(): StatusCounts {
   return {
     present: 0,
@@ -178,7 +192,8 @@ reportingRouter.get(
         previous: null,
         trend: [],
         statusBreakdown: [],
-        classHealth: []
+        classHealth: [],
+        absenceInsights: { byClass: [] }
       });
     }
 
@@ -190,8 +205,10 @@ reportingRouter.get(
     fromDate.setDate(fromDate.getDate() - (days - 1));
 
     const attendanceMatch = buildAttendanceMatch(scope, fromDate, today);
+    const isAdmin = req.auth?.activeRole === "admin";
+    const schoolAttendanceMatch = buildAttendanceMatch({}, fromDate, today);
 
-    const [dailyStatusRows, trendRows, statusRows, classRows, classes] = await Promise.all([
+    const [dailyStatusRows, trendRows, statusRows, classRows, classAbsenceRows, schoolAbsenceRows, classes] = await Promise.all([
       AttendanceModel.aggregate<{ _id: { date: Date; status: string }; count: number }>([
         { $match: attendanceMatch },
         { $unwind: "$entries" },
@@ -234,8 +251,42 @@ reportingRouter.get(
           }
         }
       ]),
-      ClassModel.find(scope.classId ? { _id: scope.classId } : scope.teacherClassIds ? { _id: { $in: scope.teacherClassIds } } : {}).select("_id name")
+      AttendanceModel.aggregate<ClassAbsenceRow>([
+        { $match: attendanceMatch },
+        { $unwind: "$entries" },
+        { $match: { "entries.status": "absent" } },
+        {
+          $group: {
+            _id: { classId: "$classId", studentId: "$entries.studentId" },
+            absenceCount: { $sum: 1 }
+          }
+        }
+      ]),
+      isAdmin
+        ? AttendanceModel.aggregate<SchoolAbsenceRow>([
+            { $match: schoolAttendanceMatch },
+            { $unwind: "$entries" },
+            { $match: { "entries.status": "absent" } },
+            { $sort: { attendanceDate: 1 } },
+            {
+              $group: {
+                _id: "$entries.studentId",
+                classId: { $last: "$classId" },
+                absenceCount: { $sum: 1 }
+              }
+            }
+          ])
+        : Promise.resolve([] as SchoolAbsenceRow[]),
+      ClassModel.find(scope.teacherClassIds ? { _id: { $in: scope.teacherClassIds } } : {}).select("_id name")
     ]);
+
+    const rankedStudentIds = Array.from(new Set([
+      ...classAbsenceRows.map((row) => row._id.studentId.toString()),
+      ...schoolAbsenceRows.map((row) => row._id.toString())
+    ])).map((id) => new mongoose.Types.ObjectId(id));
+    const rankedStudents = rankedStudentIds.length > 0
+      ? await StudentModel.find({ _id: { $in: rankedStudentIds } }).select("_id classId fullName rollNumber")
+      : [];
 
     const statusByDate = new Map<string, StatusCounts>();
     for (const row of dailyStatusRows) {
@@ -264,6 +315,55 @@ reportingRouter.get(
     );
 
     const classMap = new Map(classes.map((item) => [item._id.toString(), item]));
+    const studentMap = new Map(rankedStudents.map((item) => [item._id.toString(), item]));
+
+    const rankItems = <TRow extends { absenceCount: number }>(items: Array<TRow & {
+      studentId: mongoose.Types.ObjectId;
+      classId: mongoose.Types.ObjectId;
+    }>) => items
+      .flatMap((item) => {
+        const student = studentMap.get(item.studentId.toString());
+        const classInfo = classMap.get(item.classId.toString());
+        if (!student || !classInfo) {
+          return [];
+        }
+
+        return [{
+          studentId: item.studentId,
+          studentName: student.fullName,
+          rollNumber: student.rollNumber,
+          classId: item.classId,
+          className: classInfo.name,
+          absenceCount: item.absenceCount
+        }];
+      })
+      .sort((a, b) => b.absenceCount - a.absenceCount || a.studentName.localeCompare(b.studentName))
+      .slice(0, 3);
+
+    const insightClasses = scope.classId
+      ? classes.filter((item) => item._id.toString() === scope.classId?.toString())
+      : classes;
+    const byClass = insightClasses.map((classInfo) => ({
+      classId: classInfo._id,
+      className: classInfo.name,
+      students: rankItems(classAbsenceRows
+        .filter((row) => row._id.classId.toString() === classInfo._id.toString())
+        .map((row) => ({
+          studentId: row._id.studentId,
+          classId: row._id.classId,
+          absenceCount: row.absenceCount
+        })))
+    }));
+
+    const schoolTop = isAdmin
+      ? rankItems(schoolAbsenceRows.map((row) => {
+          return {
+            studentId: row._id,
+            classId: row.classId,
+            absenceCount: row.absenceCount
+          };
+        }))
+      : undefined;
 
     const trend = trendRows.map((item) => ({
       date: toDateKey(item._id),
@@ -275,18 +375,22 @@ reportingRouter.get(
     const statusBreakdown = statusRows.map((item) => ({ status: item._id, count: item.count }));
 
     const classHealth = classRows
-      .map((item) => {
+      .flatMap((item) => {
         const classInfo = classMap.get(item._id.toString());
+        if (!classInfo) {
+          return [];
+        }
+
         const rate = item.total === 0 ? 0 : Number(((item.presentLike / item.total) * 100).toFixed(1));
 
-        return {
+        return [{
           classId: item._id,
-          className: classInfo?.name ?? "Unknown Class",
+          className: classInfo.name,
           academicSession: env.ACADEMIC_SESSION,
           total: item.total,
           presentLike: item.presentLike,
           rate
-        };
+        }];
       })
       .sort((a, b) => a.rate - b.rate)
       .slice(0, 5);
@@ -310,7 +414,11 @@ reportingRouter.get(
       previous: previousDate ? { date: previousDate, status: previousStatus } : null,
       trend,
       statusBreakdown,
-      classHealth
+      classHealth,
+      absenceInsights: {
+        byClass,
+        ...(schoolTop ? { schoolTop } : {})
+      }
     });
   })
 );

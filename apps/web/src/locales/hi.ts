@@ -10,7 +10,9 @@ const hi = {
     cancel: "रद्द करें",
     close: "बंद करें",
     previous: "पिछला",
-    next: "अगला"
+    next: "अगला",
+    showCredential: "पासवर्ड/पिन दिखाएं",
+    hideCredential: "पासवर्ड/पिन छिपाएं"
   },
   roles: {
     admin: "प्रशासक",
@@ -24,7 +26,7 @@ const hi = {
     loginTitle: "SAMS में साइन इन करें",
     loginHint: "आगे बढ़ने के लिए अपने स्कूल खाते की जानकारी दर्ज करें",
     username: "यूज़रनेम",
-    password: "पासवर्ड",
+    password: "पासवर्ड/पिन",
     signIn: "साइन इन",
     signingIn: "साइन इन हो रहा है...",
     logout: "लॉगआउट",
@@ -102,7 +104,16 @@ const hi = {
     sameAs: "{{day}} के समान",
     vsDay: "{{day}} की तुलना में {{delta}}",
     acrossClass: "1 कक्षा में",
-    acrossClasses: "{{count}} कक्षाओं में"
+    acrossClasses: "{{count}} कक्षाओं में",
+    attentionNeeded: "ध्यान आवश्यक",
+    mostAbsentStudents: "सबसे अधिक अनुपस्थित छात्र",
+    wholeSchool: "पूरा विद्यालय",
+    schoolTopThree: "विद्यालय के शीर्ष 3",
+    classTopThree: "कक्षा के शीर्ष 3",
+    rollNumber: "रोल {{number}}",
+    absentDays: "{{count}} दिन अनुपस्थित",
+    absentDays_other: "{{count}} दिन अनुपस्थित",
+    noAbsences: "इस अवधि में अनुपस्थिति का कोई रिकॉर्ड नहीं मिला।"
   },
   attendance: {
     title: "उपस्थिति पटल",

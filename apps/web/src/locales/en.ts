@@ -10,7 +10,9 @@ const en = {
     cancel: "Cancel",
     close: "Close",
     previous: "Previous",
-    next: "Next"
+    next: "Next",
+    showCredential: "Show password/PIN",
+    hideCredential: "Hide password/PIN"
   },
   roles: {
     admin: "Admin",
@@ -24,7 +26,7 @@ const en = {
     loginTitle: "Sign in to SAMS",
     loginHint: "Use your school account credentials to continue",
     username: "Username",
-    password: "Password",
+    password: "Password/PIN",
     signIn: "Sign In",
     signingIn: "Signing in...",
     logout: "Logout",
@@ -102,7 +104,16 @@ const en = {
     sameAs: "Same as {{day}}",
     vsDay: "{{delta}} vs {{day}}",
     acrossClass: "Across 1 class",
-    acrossClasses: "Across {{count}} classes"
+    acrossClasses: "Across {{count}} classes",
+    attentionNeeded: "Attention needed",
+    mostAbsentStudents: "Most absent students",
+    wholeSchool: "Whole school",
+    schoolTopThree: "School top 3",
+    classTopThree: "Class top 3",
+    rollNumber: "Roll {{number}}",
+    absentDays: "{{count}} absent day",
+    absentDays_other: "{{count}} absent days",
+    noAbsences: "No absence records found in this period."
   },
   attendance: {
     title: "Attendance Board",

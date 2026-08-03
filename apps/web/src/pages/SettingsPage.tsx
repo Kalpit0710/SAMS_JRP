@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { BellRing, Clock, KeyRound, LayoutDashboard, Lock, ShieldCheck } from "lucide-react";
 import { PageLoader } from "../components/Loader";
+import { PasswordInput } from "../components/PasswordInput";
 import { DEFAULT_REPORT_DAYS_KEY } from "../lib/preferences";
 import { TOASTS_ENABLED_KEY, useToast } from "../lib/toast";
 
@@ -193,10 +194,10 @@ export function SettingsPage({
             <form className="settings-form" onSubmit={changePin}>
               <div className="form-field">
                 <label htmlFor="current-pin">{t("settings.currentPin")}</label>
-                <input
+                <PasswordInput
                   id="current-pin"
-                  type="password"
                   autoComplete="current-password"
+                  inputMode="numeric"
                   value={currentPin}
                   required
                   onChange={(event) => setCurrentPin(event.target.value)}
@@ -204,10 +205,10 @@ export function SettingsPage({
               </div>
               <div className="form-field">
                 <label htmlFor="new-pin">{t("settings.newPin")}</label>
-                <input
+                <PasswordInput
                   id="new-pin"
-                  type="password"
                   autoComplete="new-password"
+                  inputMode="numeric"
                   value={newPin}
                   minLength={4}
                   required
@@ -216,10 +217,10 @@ export function SettingsPage({
               </div>
               <div className="form-field">
                 <label htmlFor="confirm-pin">{t("settings.confirmPin")}</label>
-                <input
+                <PasswordInput
                   id="confirm-pin"
-                  type="password"
                   autoComplete="new-password"
+                  inputMode="numeric"
                   value={confirmPin}
                   minLength={4}
                   required

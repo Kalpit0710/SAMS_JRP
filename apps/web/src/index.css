@@ -694,6 +694,157 @@ input:focus {
   width: 100%;
 }
 
+.absence-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.insights-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.insights-heading h2 {
+  margin: 0.3rem 0 0;
+  font-size: 1.25rem;
+}
+
+.insights-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--danger);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.absence-insight-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: 1rem;
+}
+
+.absence-insight-panel {
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.absence-insight-panel.school-wide {
+  border-top: 3px solid var(--danger);
+}
+
+.absence-panel-header {
+  min-height: 76px;
+  padding: 1rem 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.absence-panel-header h3 {
+  margin: 0.2rem 0 0;
+  font-size: 1rem;
+}
+
+.absence-panel-scope {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.absence-scope-icon {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.12);
+  border-radius: 8px;
+}
+
+.absence-ranking {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.absence-ranking li {
+  min-height: 64px;
+  padding: 0.75rem 1.1rem;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.7rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.absence-ranking li:last-child {
+  border-bottom: 0;
+}
+
+.rank-number {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+  border: 1px solid var(--border-light);
+  border-radius: 50%;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.rank-student {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.rank-student strong,
+.rank-student small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rank-student strong {
+  font-size: 0.86rem;
+}
+
+.rank-student small {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.absence-count {
+  color: var(--danger);
+  font-size: 0.75rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.absence-ranking .absence-empty {
+  display: flex;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 /* Table Area */
 .table-panel {
   background: var(--bg-panel);
@@ -880,6 +1031,12 @@ input:focus {
   gap: 0.5rem;
   font-size: 0.85rem;
   color: var(--text-secondary);
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
 }
 
 .login-card input {
@@ -1439,6 +1596,43 @@ input:focus {
 .form-field input:focus,
 .form-field select:focus {
   border-color: var(--accent-primary);
+}
+
+.password-input-control {
+  position: relative;
+  width: 100%;
+}
+
+.password-input-control > input {
+  padding-right: 3rem;
+}
+
+.password-visibility-btn {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  bottom: 1px;
+  display: grid;
+  width: 42px;
+  padding: 0;
+  place-items: center;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 0;
+  border-left: 1px solid var(--border-light);
+  border-radius: 0 7px 7px 0;
+  cursor: pointer;
+}
+
+.password-visibility-btn:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+}
+
+.password-visibility-btn:focus-visible {
+  color: var(--accent-primary);
+  outline: 2px solid var(--accent-primary);
+  outline-offset: -2px;
 }
 
 .checkbox-row {
@@ -2684,6 +2878,15 @@ input:focus {
   .dashboard-filters label,
   .dashboard-filters select {
     width: 100%;
+  }
+
+  .insights-heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .absence-ranking li {
+    padding-inline: 0.85rem;
   }
 
   .alert-filters {

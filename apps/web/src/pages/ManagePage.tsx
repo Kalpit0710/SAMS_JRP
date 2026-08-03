@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useToast } from "../lib/toast";
 import { InlineLoader } from "../components/Loader";
+import { PasswordInput } from "../components/PasswordInput";
 import {
   BookOpen,
   GraduationCap,
@@ -783,9 +784,8 @@ export function ManagePage({ requestWithAuth, canEdit }: { requestWithAuth: Mana
                     {t("manage.newPinFor", { name: resetPinFor.name })}
                     <span className="req">*</span>
                   </label>
-                  <input
+                  <PasswordInput
                     id="reset-pin-input"
-                    type="text"
                     inputMode="numeric"
                     autoComplete="off"
                     value={newPin}
