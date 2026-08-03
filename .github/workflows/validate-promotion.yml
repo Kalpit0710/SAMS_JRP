@@ -1,0 +1,26 @@
+name: Validate promotion source
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  source:
+    name: Validate promotion source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require dev as the source branch
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          if [[ "$HEAD_REF" != "dev" ]]; then
+            echo "Pull requests into main must come from dev; received: $HEAD_REF" >&2
+            exit 1
+          fi
+          echo "Promotion source is dev."
