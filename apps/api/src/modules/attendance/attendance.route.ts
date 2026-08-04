@@ -4,7 +4,7 @@ import { asyncHandler } from "../../lib/async-handler.js";
 import { setAuditMeta } from "../../middleware/audit-log.middleware.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.middleware.js";
 import { AttendanceModel } from "../../models/attendance.model.js";
-import { getAttendanceLockMinutes } from "../../models/attendance-settings.model.js";
+import { AttendanceSettingsModel, getAttendanceLockMinutes } from "../../models/attendance-settings.model.js";
 import { ClassModel } from "../../models/class.model.js";
 import { StudentModel } from "../../models/student.model.js";
 import { TeacherModel } from "../../models/teacher.model.js";
@@ -52,6 +52,48 @@ function buildEntriesMap(entries: { studentId: string }[]) {
   return new Set(ids);
 }
 
+async function getAcademicYearForDate(attendanceDate: Date): Promise<string | null> {
+  const settings = await AttendanceSettingsModel.findOne();
+  const startMonth = settings?.academicYearStartMonth ?? 4;
+  const startDay = settings?.academicYearStartDay ?? 1;
+  const year = attendanceDate.getUTCFullYear();
+  const month = attendanceDate.getUTCMonth() + 1;
+  const day = attendanceDate.getUTCDate();
+  const startDate = new Date(Date.UTC(year, startMonth - 1, startDay));
+  const endDate = new Date(Date.UTC(year + 1, startMonth - 1, startDay));
+  endDate.setUTCDate(endDate.getUTCDate() - 1);
+  if (attendanceDate >= startDate && attendanceDate <= endDate) {
+    return `${year}-${year + 1}`;
+  }
+  const prevYear = year - 1;
+  const prevStartDate = new Date(Date.UTC(prevYear, startMonth - 1, startDay));
+  const prevEndDate = new Date(Date.UTC(year, startMonth - 1, startDay));
+  prevEndDate.setUTCDate(prevEndDate.getUTCDate() - 1);
+  if (attendanceDate >= prevStartDate && attendanceDate <= prevEndDate) {
+    return `${prevYear}-${year}`;
+  }
+  return null;
+}
+
+async function ensureArchivedYearIsWritable(attendanceDate: Date): Promise<void> {
+  const academicYear = await getAcademicYearForDate(attendanceDate);
+  if (!academicYear) {
+    return;
+  }
+
+  const archive = await import("../../models/student-academic-year-archive.model.js").then((module) => module.StudentAcademicYearArchiveModel.findOne({
+    academicYear,
+    $or: [
+      { monthly: { $elemMatch: { totalMarkedDays: { $gt: 0 } } } },
+      { totals: { $exists: true } }
+    ]
+  }).lean());
+
+  if (archive) {
+    throw Object.assign(new Error("Attendance for a finalized academic year cannot be changed"), { statusCode: 409 });
+  }
+}
+
 attendanceRouter.post(
   "/submit",
   requireRoles(["admin", "teacher"]),
@@ -76,6 +118,8 @@ attendanceRouter.post(
     if (attendanceDate.getTime() > todayMidnight.getTime()) {
       return res.status(400).json({ message: "Cannot record attendance for a future date" });
     }
+
+    await ensureArchivedYearIsWritable(attendanceDate);
 
     const classDoc = await ClassModel.findById(classId).select("name isActive");
     if (!classDoc) {
@@ -158,6 +202,8 @@ attendanceRouter.patch(
     if (!item) {
       return res.status(404).json({ message: "Attendance record not found" });
     }
+
+    await ensureArchivedYearIsWritable(item.attendanceDate);
 
     const previousEntries = new Map(item.entries.map((entry) => [entry.studentId.toString(), {
       status: entry.status,

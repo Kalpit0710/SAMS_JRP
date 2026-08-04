@@ -33,5 +33,12 @@ export const CreateStudentSchema = z.object({
 export const NEVER_LOCK_MINUTES = 365 * 24 * 60;
 
 export const UpdateLockSchema = z.object({
-  attendanceLockMinutes: z.number().int().min(0).max(NEVER_LOCK_MINUTES)
+  attendanceLockMinutes: z.number().int().min(0).max(NEVER_LOCK_MINUTES),
+  academicYearStartMonth: z.number().int().min(1).max(12).optional(),
+  academicYearStartDay: z.number().int().min(1).max(31).optional(),
+  retentionDays: z.number().int().min(1).max(3650).optional()
+});
+
+export const ArchiveFinalizeSchema = z.object({
+  academicYear: z.string().min(4)
 });

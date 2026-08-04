@@ -19,5 +19,6 @@ const deviceSessionSchema = new mongoose.Schema(
 );
 
 deviceSessionSchema.index({ userId: 1, lastSeenAt: -1 });
+deviceSessionSchema.index({ isRevoked: 1, updatedAt: 1 });
 
 export const DeviceSessionModel = mongoose.model("DeviceSession", deviceSessionSchema);

@@ -11,10 +11,12 @@ import { AttendanceSettingsModel } from "../../models/attendance-settings.model.
 import { ClassModel } from "../../models/class.model.js";
 import { DeviceSessionModel } from "../../models/device-session.model.js";
 import { NotificationModel } from "../../models/notification.model.js";
+import { StudentAcademicYearArchiveModel } from "../../models/student-academic-year-archive.model.js";
 import { StudentModel } from "../../models/student.model.js";
 import { TeacherModel } from "../../models/teacher.model.js";
 import { UserModel, hashPassword } from "../../models/user.model.js";
 import {
+  ArchiveFinalizeSchema,
   CreateClassSchema,
   CreateStudentSchema,
   CreateTeacherSchema,
@@ -548,12 +550,38 @@ masterDataRouter.delete(
   })
 );
 
+function getAcademicYearBounds(academicYear: string, startMonth: number, startDay: number) {
+  const [startYearStr, endYearStr] = academicYear.split("-");
+  const startYear = Number(startYearStr);
+  const endYear = Number(endYearStr);
+  const startDate = new Date(Date.UTC(startYear, startMonth - 1, startDay, 0, 0, 0, 0));
+  const endDate = new Date(Date.UTC(endYear, startMonth - 1, startDay, 23, 59, 59, 999));
+  endDate.setUTCDate(endDate.getUTCDate() - 1);
+  return { startDate, endDate };
+}
+
+function summarizeAttendanceEntries(entries: Array<{ status: string }>) {
+  const counts = { present: 0, absent: 0, late: 0, halfDay: 0 };
+  for (const entry of entries) {
+    if (entry.status in counts) {
+      counts[entry.status as keyof typeof counts] += 1;
+    }
+  }
+  const presentLikeDays = counts.present + counts.late + counts.halfDay;
+  return { ...counts, presentLikeDays };
+}
+
 masterDataRouter.get(
   "/attendance-lock",
   requireRoles(["admin", "teacher"]),
   asyncHandler(async (_req, res) => {
     const settings = await AttendanceSettingsModel.findOne();
-    return res.status(200).json({ attendanceLockMinutes: settings?.attendanceLockMinutes ?? 60 });
+    return res.status(200).json({
+      attendanceLockMinutes: settings?.attendanceLockMinutes ?? 60,
+      academicYearStartMonth: settings?.academicYearStartMonth ?? 4,
+      academicYearStartDay: settings?.academicYearStartDay ?? 1,
+      retentionDays: settings?.retentionDays ?? 2
+    });
   })
 );
 
@@ -568,14 +596,277 @@ masterDataRouter.put(
 
     const settings = await AttendanceSettingsModel.findOneAndUpdate(
       {},
-      { $set: { attendanceLockMinutes: parsed.data.attendanceLockMinutes } },
+      {
+        $set: {
+          attendanceLockMinutes: parsed.data.attendanceLockMinutes,
+          academicYearStartMonth: parsed.data.academicYearStartMonth,
+          academicYearStartDay: parsed.data.academicYearStartDay,
+          retentionDays: parsed.data.retentionDays
+        }
+      },
       { upsert: true, new: true }
     );
 
     trackMutationAudit(res, "MASTER_ATTENDANCE_LOCK_UPDATE", "master-data/attendance-lock", {
-      attendanceLockMinutes: settings.attendanceLockMinutes
+      attendanceLockMinutes: settings.attendanceLockMinutes,
+      academicYearStartMonth: settings.academicYearStartMonth,
+      academicYearStartDay: settings.academicYearStartDay,
+      retentionDays: settings.retentionDays
     });
 
-    return res.status(200).json({ attendanceLockMinutes: settings.attendanceLockMinutes });
+    return res.status(200).json({
+      attendanceLockMinutes: settings.attendanceLockMinutes,
+      academicYearStartMonth: settings.academicYearStartMonth,
+      academicYearStartDay: settings.academicYearStartDay,
+      retentionDays: settings.retentionDays
+    });
+  })
+);
+
+masterDataRouter.get(
+  "/attendance-archive/records",
+  requireRoles(["admin", "teacher"]),
+  asyncHandler(async (req, res) => {
+    const academicYear = typeof req.query.academicYear === "string" ? req.query.academicYear : "";
+    const classId = typeof req.query.classId === "string" && mongoose.isValidObjectId(req.query.classId) ? req.query.classId : undefined;
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const minPercentage = typeof req.query.minPercentage === "string" ? Number.parseInt(req.query.minPercentage, 10) : 0;
+    const sortBy = typeof req.query.sortBy === "string" ? req.query.sortBy : "studentName";
+    const sortOrder = typeof req.query.sortOrder === "string" && req.query.sortOrder === "desc" ? -1 : 1;
+
+    const availableArchives = await StudentAcademicYearArchiveModel.find({}).sort({ academicYear: 1 }).lean();
+    const availableAcademicYears = Array.from(new Set(availableArchives.map((item) => item.academicYear).filter(Boolean))).sort();
+    const selectedAcademicYear = academicYear || availableAcademicYears[availableAcademicYears.length - 1] || "";
+
+    const filter: Record<string, unknown> = {};
+    if (selectedAcademicYear) {
+      filter.academicYear = selectedAcademicYear;
+    }
+    if (classId) {
+      filter.classId = new mongoose.Types.ObjectId(classId);
+    }
+
+    const archives = await StudentAcademicYearArchiveModel.find(filter).sort({ studentId: 1 }).lean();
+    const studentIds = archives.map((item) => item.studentId);
+    const students = await StudentModel.find({ _id: { $in: studentIds } }).select("_id fullName regNo rollNumber classId").lean();
+    const studentMap = new Map(students.map((student) => [student._id.toString(), student]));
+    const classes = await ClassModel.find({ _id: { $in: archives.map((item) => item.classId) } }).select("_id name").lean();
+    const classMap = new Map(classes.map((classItem) => [classItem._id.toString(), classItem]));
+
+    const items = archives
+      .map((archive) => {
+        const student = studentMap.get(archive.studentId.toString());
+        const classDoc = classMap.get(archive.classId.toString());
+        const totalMarkedDays = archive.totals?.totalMarkedDays ?? 0;
+        const presentLikePercentage = totalMarkedDays > 0 ? Math.round(((archive.totals?.presentLikeDays ?? 0) / totalMarkedDays) * 100) : 0;
+        return {
+          ...archive,
+          student,
+          className: classDoc?.name ?? "",
+          presentLikePercentage
+        };
+      })
+      .filter((archive) => {
+        const matchesSearch = !search || [archive.student?.fullName, archive.student?.regNo, archive.student?.rollNumber]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(search.toLowerCase()));
+        const matchesPercentage = presentLikePercentage(archive) >= minPercentage;
+        return matchesSearch && matchesPercentage;
+      })
+      .sort((left, right) => {
+        const direction = sortOrder === -1 ? -1 : 1;
+        switch (sortBy) {
+          case "percentage":
+            return (presentLikePercentage(right) - presentLikePercentage(left)) * direction;
+          case "markedDays":
+            return (right.totals.totalMarkedDays - left.totals.totalMarkedDays) * direction;
+          case "finalizedAt":
+            return (new Date(right.finalizedAt ?? 0).getTime() - new Date(left.finalizedAt ?? 0).getTime()) * direction;
+          case "studentName":
+          default:
+            return direction * String(left.student?.fullName ?? "").localeCompare(String(right.student?.fullName ?? ""));
+        }
+      });
+
+    return res.status(200).json({
+      academicYear: selectedAcademicYear,
+      availableAcademicYears,
+      items
+    });
+  })
+);
+
+function presentLikePercentage(archive: { totals?: { presentLikeDays?: number; totalMarkedDays?: number } }) {
+  const totalMarkedDays = archive.totals?.totalMarkedDays ?? 0;
+  if (totalMarkedDays === 0) {
+    return 0;
+  }
+  return Math.round(((archive.totals?.presentLikeDays ?? 0) / totalMarkedDays) * 100);
+}
+
+masterDataRouter.get(
+  "/attendance-archive/preview",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const academicYear = typeof req.query.academicYear === "string" ? req.query.academicYear : "";
+    if (!academicYear) {
+      return res.status(400).json({ message: "academicYear is required" });
+    }
+
+    const settings = await AttendanceSettingsModel.findOne();
+    const bounds = getAcademicYearBounds(academicYear, settings?.academicYearStartMonth ?? 4, settings?.academicYearStartDay ?? 1);
+
+    const attendanceItems = await AttendanceModel.find({
+      attendanceDate: { $gte: bounds.startDate, $lte: bounds.endDate }
+    }).lean();
+
+    const studentIds = Array.from(new Set(attendanceItems.flatMap((item) => item.entries.map((entry) => entry.studentId.toString()))));
+    const students = await StudentModel.find({ _id: { $in: studentIds } }).select("_id classId").lean();
+    const studentMap = new Map(students.map((student) => [student._id.toString(), student]));
+
+    const summary = attendanceItems.reduce<Record<string, { academicYear: string; studentCount: number; attendanceCount: number }>>((acc, item) => {
+      const studentCount = item.entries.length;
+      return {
+        ...acc,
+        [academicYear]: {
+          academicYear,
+          studentCount: (acc[academicYear]?.studentCount ?? 0) + studentCount,
+          attendanceCount: (acc[academicYear]?.attendanceCount ?? 0) + 1
+        }
+      };
+    }, {});
+
+    const preview = {
+      academicYear,
+      studentCount: studentIds.length,
+      attendanceCount: attendanceItems.length,
+      items: attendanceItems.map((item) => ({
+        classId: item.classId.toString(),
+        attendanceDate: item.attendanceDate.toISOString(),
+        studentCount: item.entries.length,
+        students: item.entries.map((entry) => {
+          const student = studentMap.get(entry.studentId.toString());
+          return {
+            studentId: entry.studentId.toString(),
+            classId: student?.classId?.toString() ?? item.classId.toString(),
+            status: entry.status
+          };
+        })
+      }))
+    };
+
+    return res.status(200).json({
+      ...preview,
+      summary: summary[academicYear] ?? { academicYear, studentCount: 0, attendanceCount: 0 }
+    });
+  })
+);
+
+masterDataRouter.post(
+  "/attendance-archive/finalize",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const parsed = ArchiveFinalizeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid archive payload", errors: parsed.error.flatten() });
+    }
+
+    const settings = await AttendanceSettingsModel.findOne();
+    const bounds = getAcademicYearBounds(parsed.data.academicYear, settings?.academicYearStartMonth ?? 4, settings?.academicYearStartDay ?? 1);
+
+    const attendanceItems = await AttendanceModel.find({
+      attendanceDate: { $gte: bounds.startDate, $lte: bounds.endDate }
+    }).lean();
+
+    if (attendanceItems.length === 0) {
+      return res.status(201).json({ academicYear: parsed.data.academicYear, createdArchives: 0, deletedAttendanceCount: 0 });
+    }
+
+    const archivesByStudent = new Map<string, {
+      studentId: mongoose.Types.ObjectId;
+      classId: mongoose.Types.ObjectId;
+      academicYear: string;
+      academicYearStart: Date;
+      academicYearEnd: Date;
+      totals: Record<string, number>;
+      monthly: Array<Record<string, number>>;
+      finalizedBy?: mongoose.Types.ObjectId;
+    }>();
+
+    for (const item of attendanceItems) {
+      const month = item.attendanceDate.getUTCMonth() + 1;
+      for (const entry of item.entries) {
+        const studentId = entry.studentId.toString();
+        const archive = archivesByStudent.get(studentId) ?? {
+          studentId: entry.studentId,
+          classId: item.classId,
+          academicYear: parsed.data.academicYear,
+          academicYearStart: bounds.startDate,
+          academicYearEnd: bounds.endDate,
+          totals: { presentLikeDays: 0, present: 0, absent: 0, late: 0, halfDay: 0, totalMarkedDays: 0 },
+          monthly: [] as Array<Record<string, number>>,
+          finalizedBy: req.auth?.userId ? new mongoose.Types.ObjectId(req.auth.userId) : undefined
+        };
+
+        const summary = summarizeAttendanceEntries([entry]);
+        archive.totals.presentLikeDays += summary.presentLikeDays;
+        archive.totals.present += summary.present;
+        archive.totals.absent += summary.absent;
+        archive.totals.late += summary.late;
+        archive.totals.halfDay += summary.halfDay;
+        archive.totals.totalMarkedDays += 1;
+
+        const monthEntry = archive.monthly.find((candidate) => candidate.month === month);
+        if (monthEntry) {
+          monthEntry.presentLikeDays += summary.presentLikeDays;
+          monthEntry.present += summary.present;
+          monthEntry.absent += summary.absent;
+          monthEntry.late += summary.late;
+          monthEntry.halfDay += summary.halfDay;
+          monthEntry.totalMarkedDays += 1;
+        } else {
+          archive.monthly.push({
+            month,
+            presentLikeDays: summary.presentLikeDays,
+            present: summary.present,
+            absent: summary.absent,
+            late: summary.late,
+            halfDay: summary.halfDay,
+            totalMarkedDays: 1
+          });
+        }
+
+        archivesByStudent.set(studentId, archive);
+      }
+    }
+
+    const createdArchives = await Promise.all(Array.from(archivesByStudent.values()).map(async (archive) => {
+      return StudentAcademicYearArchiveModel.create({
+        studentId: archive.studentId,
+        classId: archive.classId,
+        academicYear: archive.academicYear,
+        academicYearStart: archive.academicYearStart,
+        academicYearEnd: archive.academicYearEnd,
+        totals: archive.totals,
+        monthly: archive.monthly,
+        finalizedBy: archive.finalizedBy
+      });
+    }));
+
+    await AttendanceModel.deleteMany({
+      attendanceDate: { $gte: bounds.startDate, $lte: bounds.endDate }
+    });
+
+    trackMutationAudit(res, "MASTER_ATTENDANCE_ARCHIVE_FINALIZE", "master-data/attendance-archive", {
+      academicYear: parsed.data.academicYear,
+      createdArchives: createdArchives.length,
+      deletedAttendanceCount: attendanceItems.length
+    });
+
+    return res.status(201).json({
+      academicYear: parsed.data.academicYear,
+      createdArchives: createdArchives.length,
+      deletedAttendanceCount: attendanceItems.length
+    });
   })
 );

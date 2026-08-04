@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { BellRing, Clock, KeyRound, LayoutDashboard, Lock, ShieldCheck } from "lucide-react";
+import { BellRing, Clock, KeyRound, LayoutDashboard, Lock, ShieldCheck, Archive } from "lucide-react";
 import { PageLoader } from "../components/Loader";
 import { PasswordInput } from "../components/PasswordInput";
 import { DEFAULT_REPORT_DAYS_KEY } from "../lib/preferences";
@@ -82,6 +82,13 @@ export function SettingsPage({
       };
   const [lockMinutes, setLockMinutes] = useState(60);
   const [savedMinutes, setSavedMinutes] = useState(60);
+  const [academicYearStartMonth, setAcademicYearStartMonth] = useState(4);
+  const [academicYearStartDay, setAcademicYearStartDay] = useState(1);
+  const [retentionDays, setRetentionDays] = useState(2);
+  const [archiveYear, setArchiveYear] = useState("");
+  const [archivePreview, setArchivePreview] = useState<{ studentCount: number; attendanceCount: number } | null>(null);
+  const [archivePreviewing, setArchivePreviewing] = useState(false);
+  const [archiveFinalizing, setArchiveFinalizing] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -144,13 +151,16 @@ export function SettingsPage({
     setError(null);
 
     try {
-      const result = await requestWithAuth<{ attendanceLockMinutes: number }>("/master-data/attendance-lock", {
+      const result = await requestWithAuth<{ attendanceLockMinutes: number; academicYearStartMonth?: number; academicYearStartDay?: number; retentionDays?: number }>("/master-data/attendance-lock", {
         method: "GET"
       });
 
       const minutes = Number(result.attendanceLockMinutes ?? 60);
       setLockMinutes(minutes);
       setSavedMinutes(minutes);
+      setAcademicYearStartMonth(Number(result.academicYearStartMonth ?? 4));
+      setAcademicYearStartDay(Number(result.academicYearStartDay ?? 1));
+      setRetentionDays(Number(result.retentionDays ?? 2));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : t("settings.loadFailed"));
     } finally {
@@ -175,7 +185,12 @@ export function SettingsPage({
       await requestWithAuth("/master-data/attendance-lock", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ attendanceLockMinutes: lockMinutes })
+        body: JSON.stringify({
+          attendanceLockMinutes: lockMinutes,
+          academicYearStartMonth,
+          academicYearStartDay,
+          retentionDays
+        })
       });
 
       setSavedMinutes(lockMinutes);
@@ -187,6 +202,54 @@ export function SettingsPage({
       toast.error(message);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handlePreviewArchive = async () => {
+    if (!archiveYear.trim()) {
+      setError(t("settings.archiveYearLabel"));
+      return;
+    }
+
+    setArchivePreviewing(true);
+    setError(null);
+    try {
+      const response = await requestWithAuth<{ studentCount: number; attendanceCount: number }>(`/master-data/attendance-archive/preview?academicYear=${encodeURIComponent(archiveYear.trim())}`, {
+        method: "GET"
+      });
+      setArchivePreview(response);
+      toast.success(t("settings.archivePreviewSuccess"));
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : t("settings.archivePreviewFailed");
+      setError(message);
+      toast.error(message);
+    } finally {
+      setArchivePreviewing(false);
+    }
+  };
+
+  const handleFinalizeArchive = async () => {
+    if (!archiveYear.trim()) {
+      setError(t("settings.archiveYearLabel"));
+      return;
+    }
+
+    setArchiveFinalizing(true);
+    setError(null);
+    try {
+      await requestWithAuth("/master-data/attendance-archive/finalize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ academicYear: archiveYear.trim() })
+      });
+      setArchivePreview(null);
+      toast.success(t("settings.archiveFinalizeSuccess"));
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : t("settings.archiveFinalizeFailed");
+      setError(message);
+      toast.error(message);
+    } finally {
+      setArchiveFinalizing(false);
     }
   };
 
@@ -335,6 +398,75 @@ export function SettingsPage({
               )}
             </div>
           )}
+        </section>
+
+        <section className="table-panel">
+          <div className="table-header">
+            <div>
+              <h2 className="panel-title">
+                <Archive size={16} /> {t("settings.archiveTitle")}
+              </h2>
+              <p className="panel-subtitle">{t("settings.archiveDesc")}</p>
+            </div>
+          </div>
+          <div className="settings-body">
+            <div className="form-field">
+              <label htmlFor="archive-year">{t("settings.archiveYearLabel")}</label>
+              <input
+                id="archive-year"
+                value={archiveYear}
+                placeholder={t("settings.archiveYearPlaceholder")}
+                onChange={(event) => setArchiveYear(event.target.value)}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="academic-year-start-month">{t("settings.archiveStartMonthLabel")}</label>
+              <select
+                id="academic-year-start-month"
+                value={academicYearStartMonth}
+                onChange={(event) => setAcademicYearStartMonth(Number(event.target.value))}
+              >
+                {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => (
+                  <option key={month} value={month}>{month}</option>
+                ))}
+              </select>
+            </div>
+            <div className="form-field">
+              <label htmlFor="academic-year-start-day">{t("settings.archiveStartDayLabel")}</label>
+              <input
+                id="academic-year-start-day"
+                type="number"
+                min="1"
+                max="31"
+                value={academicYearStartDay}
+                onChange={(event) => setAcademicYearStartDay(Number(event.target.value))}
+              />
+            </div>
+            <div className="form-field">
+              <label htmlFor="archive-retention-days">{t("settings.archiveRetentionLabel")}</label>
+              <input
+                id="archive-retention-days"
+                type="number"
+                min="1"
+                max="3650"
+                value={retentionDays}
+                onChange={(event) => setRetentionDays(Number(event.target.value))}
+              />
+            </div>
+            {archivePreview ? (
+              <div className="policy-hint">
+                <strong>{t("settings.archivePreviewSummary", { studentCount: archivePreview.studentCount, attendanceCount: archivePreview.attendanceCount })}</strong>
+              </div>
+            ) : null}
+            <div className="settings-actions">
+              <button type="button" className="secondary-btn" disabled={archivePreviewing} onClick={() => void handlePreviewArchive()}>
+                {archivePreviewing ? t("settings.archivePreviewing") : t("settings.archivePreview")}
+              </button>
+              <button type="button" className="primary-btn" disabled={archiveFinalizing} onClick={() => void handleFinalizeArchive()}>
+                {archiveFinalizing ? t("settings.archiveFinalizing") : t("settings.archiveFinalize")}
+              </button>
+            </div>
+          </div>
         </section>
 
         <section className="table-panel">

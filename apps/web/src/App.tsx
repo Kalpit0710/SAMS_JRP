@@ -7,7 +7,7 @@ import {
   ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis 
 } from "recharts";
 import {
-  Activity, CheckCircle, ChevronRight, ChevronsLeft, ChevronsRight, Clock,
+  Activity, Archive, CheckCircle, ChevronRight, ChevronsLeft, ChevronsRight, Clock,
   LayoutDashboard, LayoutGrid, List, LogOut, MoreHorizontal, Rows3, Settings, ShieldAlert,
   Sun, Users, CheckSquare, AlertTriangle, AlertCircle, BarChart as BarChartIcon,
   Database, MessageCircle, FileSpreadsheet, UserX, X
@@ -22,6 +22,7 @@ import LandingPage from "./pages/LandingPage";
 import ManagePage from "./pages/ManagePage";
 import NotificationsPage from "./pages/NotificationsPage";
 import SettingsPage from "./pages/SettingsPage";
+import PreviousRecordsPage from "./pages/PreviousRecordsPage";
 
 type BackendRole = "admin" | "teacher";
 type UiRole = BackendRole;
@@ -1700,6 +1701,7 @@ function App() {
     { to: "/alerts", label: t("nav.whatsappAlerts"), icon: <MessageCircle size={20} />, allow: notificationRoles },
     { to: "/data", label: t("nav.importExport"), icon: <FileSpreadsheet size={20} />, allow: dataTransferRoles },
     { to: "/reports", label: t("nav.reports"), icon: <BarChartIcon size={20} />, allow: reportRoles },
+    { to: "/previous-records", label: t("nav.previousRecords"), icon: <Archive size={20} />, allow: reportRoles },
     { to: "/audit-logs", label: t("nav.auditLogs"), icon: <ShieldAlert size={20} />, allow: auditRoles }
   ];
 
@@ -1886,6 +1888,14 @@ function App() {
             element={
               <RoleGuard role={activeRole} allow={reportRoles}>
                 <div className="page-content fade-in"><ReportsPage requestWithAuth={requestWithAuth} requestWithAuthRaw={requestWithAuthRaw} /></div>
+              </RoleGuard>
+            }
+          />
+          <Route
+            path="/previous-records"
+            element={
+              <RoleGuard role={activeRole} allow={reportRoles}>
+                <PreviousRecordsPage requestWithAuth={requestWithAuth} />
               </RoleGuard>
             }
           />

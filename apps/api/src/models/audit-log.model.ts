@@ -20,5 +20,6 @@ const auditLogSchema = new mongoose.Schema(
 
 auditLogSchema.index({ createdAt: -1 });
 auditLogSchema.index({ action: 1, resource: 1, createdAt: -1 });
+auditLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 0 });
 
 export const AuditLogModel = mongoose.model("AuditLog", auditLogSchema);

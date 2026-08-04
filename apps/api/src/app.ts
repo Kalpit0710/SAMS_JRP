@@ -21,12 +21,28 @@ import { notificationRouter } from "./modules/notifications/notification.route.j
 import { reportingRouter } from "./modules/reporting/reporting.route.js";
 import { healthRouter } from "./routes/health.route.js";
 import { metricsRouter } from "./routes/metrics.route.js";
+import { AttendanceSettingsModel } from "./models/attendance-settings.model.js";
+import { AuditLogModel } from "./models/audit-log.model.js";
+import { DeviceSessionModel } from "./models/device-session.model.js";
+import { ImportLogModel } from "./models/import-log.model.js";
 
 function parseAllowedOrigins(corsOriginConfig: string): string[] {
   return corsOriginConfig
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
+}
+
+async function cleanupExpiredRetentionData() {
+  const settings = await AttendanceSettingsModel.findOne();
+  const retentionDays = settings?.retentionDays ?? 2;
+  const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000);
+
+  await Promise.all([
+    AuditLogModel.deleteMany({ createdAt: { $lt: cutoff } }),
+    ImportLogModel.deleteMany({ createdAt: { $lt: cutoff } }),
+    DeviceSessionModel.deleteMany({ isRevoked: true, updatedAt: { $lt: cutoff } })
+  ]);
 }
 
 export function createApp() {
@@ -147,6 +163,10 @@ export function createApp() {
     });
   }
 
+  void cleanupExpiredRetentionData().catch((error) => {
+    logger.warn("Retention cleanup failed", { message: error instanceof Error ? error.message : String(error) });
+  });
+
   app.use((_req, res) => {
     res.status(404).json({ message: "Route not found" });
   });
@@ -182,6 +202,10 @@ export function createApp() {
 
     if (error instanceof mongoose.Error.ValidationError) {
       return res.status(400).json({ message: "Validation failed", requestId });
+    }
+
+    if ((error as { statusCode?: number }).statusCode === 409) {
+      return res.status(409).json({ message: error.message, requestId });
     }
 
     if ((error as { code?: number }).code === 11000) {

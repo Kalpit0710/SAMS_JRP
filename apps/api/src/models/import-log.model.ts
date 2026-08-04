@@ -21,5 +21,6 @@ const importLogSchema = new mongoose.Schema(
 );
 
 importLogSchema.index({ createdAt: -1 });
+importLogSchema.index({ createdAt: 1 }, { expireAfterSeconds: 0 });
 
 export const ImportLogModel = mongoose.model("ImportLog", importLogSchema);
