@@ -30,6 +30,10 @@ function normalizeDate(dateString: string): Date {
   return date;
 }
 
+function isSunday(value: Date): boolean {
+  return new Date(value).getDay() === 0;
+}
+
 function toDateKey(value: Date): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -75,6 +79,10 @@ attendanceRouter.post(
     todayMidnight.setHours(0, 0, 0, 0);
     if (attendanceDate.getTime() > todayMidnight.getTime()) {
       return res.status(400).json({ message: "Cannot record attendance for a future date" });
+    }
+
+    if (isSunday(attendanceDate)) {
+      return res.status(400).json({ message: "Sunday is a holiday; attendance cannot be recorded" });
     }
 
     const classDoc = await ClassModel.findById(classId).select("name isActive");

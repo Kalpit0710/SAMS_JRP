@@ -13,6 +13,17 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 
 const app = createApp();
 
+function mostRecentWeekday(dayOfWeek: number): Date {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+
+  while (date.getDay() !== dayOfWeek) {
+    date.setDate(date.getDate() - 1);
+  }
+
+  return date;
+}
+
 async function clearDatabase() {
   await Promise.all([
     UserModel.deleteMany({}),
@@ -63,6 +74,7 @@ describe("auth and reporting integration", () => {
     });
 
     expect(login.status).toBe(200);
+    const teacherAccessToken = login.body.accessToken as string;
     expect(login.body.user.activeRole).toBe("teacher");
     expect(typeof login.body.accessToken).toBe("string");
 
@@ -294,5 +306,186 @@ describe("auth and reporting integration", () => {
     expect(csvExport.status).toBe(200);
     expect(csvExport.header["content-type"]).toContain("text/csv");
     expect(csvExport.text).toContain("date,class,session,totalMarked,presentLike,rate");
+  });
+
+  it("shows class view attendance by student and excludes Sundays from total classes", async () => {
+    const admin = await UserModel.create({
+      fullName: "Admin User",
+      username: "admin.class-view",
+      passwordHash: await hashPassword("Admin@12345"),
+      roles: ["admin"],
+      isActive: true
+    });
+
+    const teacherUser = await UserModel.create({
+      fullName: "Teacher User",
+      username: "teacher.class-view",
+      passwordHash: await hashPassword("Teacher@12345"),
+      roles: ["teacher"],
+      isActive: true
+    });
+
+    const classA = await ClassModel.create({ name: "Class 7" });
+    const classB = await ClassModel.create({ name: "Class 8" });
+
+    const studentA1 = await StudentModel.create({
+      regNo: "REG-CV-A1",
+      fullName: "Student A1",
+      classId: classA._id,
+      rollNumber: "1",
+      status: "active"
+    });
+
+    const studentA2 = await StudentModel.create({
+      regNo: "REG-CV-A2",
+      fullName: "Student A2",
+      classId: classA._id,
+      rollNumber: "2",
+      status: "active"
+    });
+
+    const studentB1 = await StudentModel.create({
+      regNo: "REG-CV-B1",
+      fullName: "Student B1",
+      classId: classB._id,
+      rollNumber: "1",
+      status: "active"
+    });
+
+    await TeacherModel.create({
+      userId: teacherUser._id,
+      fullName: "Teacher User",
+      classId: classA._id,
+      isActive: true
+    });
+
+    const monday = mostRecentWeekday(1);
+    const sunday = new Date(monday);
+    sunday.setDate(monday.getDate() - 1);
+
+    await AttendanceModel.create({
+      classId: classA._id,
+      attendanceDate: monday,
+      entries: [
+        { studentId: studentA1._id, status: "present" },
+        { studentId: studentA2._id, status: "absent" }
+      ],
+      submittedBy: admin._id,
+      lastUpdatedBy: admin._id,
+      lockedAt: new Date(monday.getTime() + 60 * 60 * 1000)
+    });
+
+    await AttendanceModel.create({
+      classId: classA._id,
+      attendanceDate: sunday,
+      entries: [
+        { studentId: studentA1._id, status: "present" },
+        { studentId: studentA2._id, status: "present" }
+      ],
+      submittedBy: admin._id,
+      lastUpdatedBy: admin._id,
+      lockedAt: new Date(sunday.getTime() + 60 * 60 * 1000)
+    });
+
+    await AttendanceModel.create({
+      classId: classB._id,
+      attendanceDate: monday,
+      entries: [{ studentId: studentB1._id, status: "late" }],
+      submittedBy: admin._id,
+      lastUpdatedBy: admin._id,
+      lockedAt: new Date(monday.getTime() + 60 * 60 * 1000)
+    });
+
+    const teacherAgent = request.agent(app);
+    const login = await teacherAgent.post("/api/auth/login").send({
+      username: "teacher.class-view",
+      password: "Teacher@12345"
+    });
+
+    expect(login.status).toBe(200);
+    const teacherAccessToken = login.body.accessToken as string;
+
+    const classView = await teacherAgent
+      .get("/api/reports/class-view?page=1&pageSize=1")
+      .set("Authorization", `Bearer ${login.body.accessToken as string}`);
+
+    expect(classView.status).toBe(200);
+    expect(classView.body.sundayHoliday).toBe(true);
+    expect(classView.body.total).toBe(2);
+    expect(classView.body.totalPages).toBe(2);
+    expect(classView.body.items).toEqual([
+      expect.objectContaining({
+        studentName: "Student A1",
+        className: "Class 7",
+        presentCount: 1,
+        totalClasses: 1,
+        attendanceRate: 100
+      })
+    ]);
+
+    const secondPage = await teacherAgent
+      .get("/api/reports/class-view?page=2&pageSize=1")
+      .set("Authorization", `Bearer ${teacherAccessToken}`);
+
+    const secondPageCheck = await teacherAgent
+      .get("/api/reports/class-view?page=2&pageSize=1")
+      .set("Authorization", `Bearer ${teacherAccessToken}`);
+
+    expect(secondPageCheck.status).toBe(200);
+    expect(secondPageCheck.body.items).toEqual([
+      expect.objectContaining({
+        studentName: "Student A2",
+        className: "Class 7",
+        presentCount: 0,
+        totalClasses: 1,
+        attendanceRate: 0
+      })
+    ]);
+
+    const studentHistory = await teacherAgent
+      .get(`/api/reports/student-history/${studentA1.id}`)
+      .set("Authorization", `Bearer ${teacherAccessToken}`);
+
+    const studentHistoryCheck = await teacherAgent
+      .get(`/api/reports/student-history/${studentA1.id}`)
+      .set("Authorization", `Bearer ${teacherAccessToken}`);
+
+    expect(studentHistoryCheck.status).toBe(200);
+    expect(studentHistoryCheck.body.student).toEqual(expect.objectContaining({
+      studentName: "Student A1",
+      className: "Class 7"
+    }));
+    expect(studentHistoryCheck.body.summary).toEqual(expect.objectContaining({
+      presentCount: 1,
+      totalClasses: 1,
+      attendanceRate: 100
+    }));
+    expect(studentHistoryCheck.body.items).toEqual([
+      expect.objectContaining({
+        attendanceDate: expect.any(String),
+        status: "present"
+      })
+    ]);
+
+    const adminAgent = request.agent(app);
+    const adminLogin = await adminAgent.post("/api/auth/login").send({
+      username: "admin.class-view",
+      password: "Admin@12345"
+    });
+
+    expect(adminLogin.status).toBe(200);
+
+    const adminClassView = await adminAgent
+      .get("/api/reports/class-view")
+      .set("Authorization", `Bearer ${adminLogin.body.accessToken as string}`);
+
+    expect(adminClassView.status).toBe(200);
+    expect(adminClassView.body.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ studentName: "Student A1", className: "Class 7", totalClasses: 1 }),
+        expect.objectContaining({ studentName: "Student A2", className: "Class 7", totalClasses: 1 }),
+        expect.objectContaining({ studentName: "Student B1", className: "Class 8", presentCount: 1, totalClasses: 1 })
+      ])
+    );
   });
 });
