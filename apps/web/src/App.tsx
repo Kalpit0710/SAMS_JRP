@@ -138,6 +138,49 @@ type TimelineResponse = {
   items: TimelineItem[];
 };
 
+type ClassViewItem = {
+  studentId: string;
+  studentName: string;
+  rollNumber?: string;
+  classId: string;
+  className: string;
+  presentCount: number;
+  totalClasses: number;
+  attendanceRate: number;
+};
+
+type ClassViewResponse = {
+  generatedAt: string;
+  sundayHoliday: boolean;
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  items: ClassViewItem[];
+};
+
+type StudentHistoryResponse = {
+  generatedAt: string;
+  sundayHoliday: boolean;
+  student: {
+    studentId: string;
+    studentName: string;
+    rollNumber?: string;
+    status: string;
+    classId: string;
+    className: string;
+  };
+  summary: {
+    presentCount: number;
+    totalClasses: number;
+    attendanceRate: number;
+  };
+  items: Array<{
+    attendanceDate: string;
+    status: AttendanceStatus;
+  }>;
+};
+
 type AuditItem = {
   _id: string;
   createdAt: string;
@@ -247,6 +290,11 @@ function formatShortDate(isoDate: string, language: string): string {
  *  rolls back to the previous calendar day (QA-H03). */
 function toLocalDateKey(date: Date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function isSundayDate(value: string): boolean {
+  const date = new Date(`${value}T00:00:00`);
+  return !Number.isNaN(date.getTime()) && date.getDay() === 0;
 }
 
 async function parseResponse<T>(response: Response): Promise<T> {
@@ -676,6 +724,7 @@ function AttendancePage({ requestWithAuth, role }: { requestWithAuth: RequestWit
   const today = toLocalDateKey();
   // A record locks teachers out once its lock window passes; admins can always correct.
   const isLocked = role === "teacher" && lockedAt != null && Date.now() > new Date(lockedAt).getTime();
+  const isSundayHoliday = isSundayDate(attendanceDate) && existingId == null;
 
   const changeViewMode = (mode: AttendanceViewMode) => {
     setViewMode(mode);
@@ -846,14 +895,14 @@ function AttendancePage({ requestWithAuth, role }: { requestWithAuth: RequestWit
   const allMarked = boardStudents.length > 0 && markedCount === boardStudents.length;
 
   const setStatus = (studentId: string, status: AttendanceStatus) => {
-    if (isLocked) {
+    if (isLocked || isSundayHoliday) {
       return;
     }
     setAttendance((previous) => ({ ...previous, [studentId]: status }));
   };
 
   const markAllPresent = () => {
-    if (isLocked) {
+    if (isLocked || isSundayHoliday) {
       return;
     }
     const nextState: Record<string, AttendanceStatus> = {};
@@ -864,7 +913,7 @@ function AttendancePage({ requestWithAuth, role }: { requestWithAuth: RequestWit
   };
 
   const clearAll = () => {
-    if (isLocked) {
+    if (isLocked || isSundayHoliday) {
       return;
     }
     setAttendance({});
@@ -882,7 +931,7 @@ function AttendancePage({ requestWithAuth, role }: { requestWithAuth: RequestWit
   );
 
   const openHeadCount = () => {
-    if (!allMarked || !selectedClass || isLocked) {
+    if (!allMarked || !selectedClass || isLocked || isSundayHoliday) {
       return;
     }
 
@@ -973,10 +1022,10 @@ function AttendancePage({ requestWithAuth, role }: { requestWithAuth: RequestWit
               onChange={(event) => setAttendanceDate(event.target.value || today)}
             />
           </label>
-          <button type="button" className="primary-btn" onClick={markAllPresent} disabled={isLocked}>
+          <button type="button" className="primary-btn" onClick={markAllPresent} disabled={isLocked || isSundayHoliday}>
             {t("attendance.markAllPresent")}
           </button>
-          <button type="button" className="ghost-btn" onClick={clearAll} disabled={isLocked}>
+          <button type="button" className="ghost-btn" onClick={clearAll} disabled={isLocked || isSundayHoliday}>
             {t("attendance.undoAll")}
           </button>
           <div className="view-switcher" role="group" aria-label={t("attendance.switchView")}>
@@ -1012,6 +1061,7 @@ function AttendancePage({ requestWithAuth, role }: { requestWithAuth: RequestWit
         <p className="progress-text">
           {t("attendance.marked")}: {markedCount}/{boardStudents.length}
         </p>
+        {isSundayHoliday ? <p className="locked-note">{t("attendance.sundayHoliday")}</p> : null}
         {isLocked ? <p className="locked-note">{t("attendance.lockedNote")}</p> : null}
         {!isLocked && existingId ? <p className="policy-hint">{t("attendance.editingExisting")}</p> : null}
         {message ? <p className="success-text">{message}</p> : null}
@@ -1036,7 +1086,7 @@ function AttendancePage({ requestWithAuth, role }: { requestWithAuth: RequestWit
                       key={status}
                       className={isSelected ? "status-btn selected" : "status-btn"}
                       onClick={() => setStatus(student._id, status)}
-                      disabled={isLocked}
+                      disabled={isLocked || isSundayHoliday}
                     >
                       {t(statusLabel[status])}
                     </button>
@@ -1051,11 +1101,18 @@ function AttendancePage({ requestWithAuth, role }: { requestWithAuth: RequestWit
       </section>
 
       <section className="simple-panel submit-panel">
-        <button type="button" className="primary-btn" disabled={!allMarked || isSubmitting || isLocked} onClick={openHeadCount}>
+        <button
+          type="button"
+          className="primary-btn"
+          disabled={!allMarked || isSubmitting || isLocked || isSundayHoliday}
+          onClick={openHeadCount}
+        >
           {existingId ? t("attendance.update") : t("attendance.submit")}
         </button>
         {isLocked ? (
           <p>{t("attendance.locked")}</p>
+        ) : isSundayHoliday ? (
+          <p>{t("attendance.sundayHoliday")}</p>
         ) : !allMarked ? (
           <p>{t("attendance.blockedUntilMarked")}</p>
         ) : (
@@ -1165,12 +1222,18 @@ function ReportsPage({ requestWithAuth, requestWithAuthRaw }: { requestWithAuth:
   const { t } = useTranslation();
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [items, setItems] = useState<TimelineItem[]>([]);
+  const [classViewItems, setClassViewItems] = useState<ClassViewItem[]>([]);
   const [classId, setClassId] = useState("");
   const [status, setStatus] = useState("");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [classViewPage, setClassViewPage] = useState(1);
+  const [classViewTotalPages, setClassViewTotalPages] = useState(1);
+  const [selectedStudent, setSelectedStudent] = useState<StudentHistoryResponse | null>(null);
+  const [studentHistoryLoading, setStudentHistoryLoading] = useState(false);
+  const [studentHistoryError, setStudentHistoryError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -1194,27 +1257,40 @@ function ReportsPage({ requestWithAuth, requestWithAuthRaw }: { requestWithAuth:
       setError(null);
 
       try {
-        const query = new URLSearchParams({ page: String(page), pageSize: "20" });
+        const timelineQuery = new URLSearchParams({ page: String(page), pageSize: "20" });
+        const classViewQuery = new URLSearchParams({ page: String(classViewPage), pageSize: "10" });
         if (classId) {
-          query.set("classId", classId);
+          timelineQuery.set("classId", classId);
+          classViewQuery.set("classId", classId);
         }
         if (status) {
-          query.set("status", status);
+          timelineQuery.set("status", status);
         }
         if (fromDate) {
-          query.set("fromDate", fromDate);
+          timelineQuery.set("fromDate", fromDate);
+          classViewQuery.set("fromDate", fromDate);
         }
         if (toDate) {
-          query.set("toDate", toDate);
+          timelineQuery.set("toDate", toDate);
+          classViewQuery.set("toDate", toDate);
         }
 
-        const response = await requestWithAuth<TimelineResponse>(`/reports/timeline?${query.toString()}`, { method: "GET", signal: controller.signal });
-        setItems(response.items);
-        setTotalPages(Math.max(1, response.totalPages));
+        const [timelineResponse, classViewResponse] = await Promise.all([
+          requestWithAuth<TimelineResponse>(`/reports/timeline?${timelineQuery.toString()}`, { method: "GET", signal: controller.signal }),
+          requestWithAuth<ClassViewResponse>(`/reports/class-view?${classViewQuery.toString()}`, { method: "GET", signal: controller.signal })
+        ]);
+        setItems(timelineResponse.items);
+        setTotalPages(Math.max(1, timelineResponse.totalPages));
+        setClassViewItems(classViewResponse.items);
+        setClassViewTotalPages(Math.max(1, classViewResponse.totalPages));
       } catch (timelineError) {
         if (controller.signal.aborted) {
           return;
         }
+        setItems([]);
+        setClassViewItems([]);
+        setTotalPages(1);
+        setClassViewTotalPages(1);
         setError(getErrorMessage(timelineError));
       } finally {
         if (!controller.signal.aborted) {
@@ -1225,7 +1301,35 @@ function ReportsPage({ requestWithAuth, requestWithAuthRaw }: { requestWithAuth:
 
     void loadTimeline();
     return () => controller.abort();
-  }, [classId, fromDate, page, requestWithAuth, status, toDate]);
+  }, [classId, classViewPage, fromDate, page, requestWithAuth, status, toDate]);
+
+  const showClassColumn = classes.length > 1 && !classId;
+
+  const openStudentHistory = async (student: ClassViewItem) => {
+    setStudentHistoryLoading(true);
+    setStudentHistoryError(null);
+    setSelectedStudent(null);
+
+    try {
+      const query = new URLSearchParams();
+      if (fromDate) {
+        query.set("fromDate", fromDate);
+      }
+      if (toDate) {
+        query.set("toDate", toDate);
+      }
+
+      const response = await requestWithAuth<StudentHistoryResponse>(
+        `/reports/student-history/${student.studentId}?${query.toString()}`,
+        { method: "GET" }
+      );
+      setSelectedStudent(response);
+    } catch (studentHistoryLoadError) {
+      setStudentHistoryError(getErrorMessage(studentHistoryLoadError));
+    } finally {
+      setStudentHistoryLoading(false);
+    }
+  };
 
   const triggerExport = async (format: "csv" | "pdf") => {
     setError(null);
@@ -1265,14 +1369,16 @@ function ReportsPage({ requestWithAuth, requestWithAuthRaw }: { requestWithAuth:
 
   return (
     <div className="attendance-stack">
-      <section className="simple-panel attendance-controls">
-        <h2>{t("reports.title")}</h2>
-        <p>{t("reports.subtitle")}</p>
-        <div className="toolbar row-wrap">
+      <section className="simple-panel reports-panel attendance-controls">
+        <div className="section-heading">
+          <h2>{t("reports.title")}</h2>
+          <p>{t("reports.subtitle")}</p>
+        </div>
+        <div className="reports-filter-grid">
           {classes.length > 1 ? (
             <label>
               {t("reports.class")}
-              <select value={classId} onChange={(event) => { setClassId(event.target.value); setPage(1); }}>
+              <select value={classId} onChange={(event) => { setClassId(event.target.value); setPage(1); setClassViewPage(1); }}>
                 <option value="">{t("reports.allClasses")}</option>
                 {classes.map((item) => (
                   <option key={item._id} value={item._id}>
@@ -1284,7 +1390,7 @@ function ReportsPage({ requestWithAuth, requestWithAuthRaw }: { requestWithAuth:
           ) : null}
           <label>
             {t("reports.status")}
-            <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}>
+            <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); setClassViewPage(1); }}>
               <option value="">{t("reports.any")}</option>
               <option value="present">{t("reports.present")}</option>
               <option value="absent">{t("reports.absent")}</option>
@@ -1294,23 +1400,82 @@ function ReportsPage({ requestWithAuth, requestWithAuthRaw }: { requestWithAuth:
           </label>
           <label>
             {t("reports.from")}
-            <input type="date" value={fromDate} onChange={(event) => { setFromDate(event.target.value); setPage(1); }} />
+            <input type="date" value={fromDate} onChange={(event) => { setFromDate(event.target.value); setPage(1); setClassViewPage(1); }} />
           </label>
           <label>
             {t("reports.to")}
-            <input type="date" value={toDate} onChange={(event) => { setToDate(event.target.value); setPage(1); }} />
+            <input type="date" value={toDate} onChange={(event) => { setToDate(event.target.value); setPage(1); setClassViewPage(1); }} />
           </label>
         </div>
-        <div className="toolbar row-wrap">
+        <div className="reports-actions">
           <button type="button" className="primary-btn" onClick={() => triggerExport("csv")}>{t("reports.exportCsv")}</button>
           <button type="button" className="ghost-btn" onClick={() => triggerExport("pdf")}>{t("reports.exportPdf")}</button>
         </div>
+        <p className="reports-note">{t("reports.sundayHolidayNote")}</p>
         {error ? <p className="error-text">{error}</p> : null}
       </section>
 
-      <section className="simple-panel">
+      <section className="simple-panel reports-panel">
+        <div className="section-heading">
+          <h3>{t("reports.classViewTitle")}</h3>
+          <p>{t("reports.classViewSubtitle")}</p>
+        </div>
+        {isLoading ? <InlineLoader label={t("reports.loadingClassView")} /> : null}
+        {!isLoading && classViewItems.length === 0 ? <div className="empty-state">{t("reports.noClassViewData")}</div> : null}
+        {!isLoading && classViewItems.length > 0 ? (
+          <div className="table-scroll">
+            <table className="data-table class-view-table">
+              <thead>
+                <tr>
+                  {showClassColumn ? <th>{t("reports.colClass")}</th> : null}
+                  <th>{t("reports.colStudent")}</th>
+                  <th>{t("reports.colRoll")}</th>
+                  <th>{t("reports.colAttendanceSummary")}</th>
+                  <th>{t("reports.colRate")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {classViewItems.map((item) => (
+                  <tr key={item.studentId}>
+                    {showClassColumn ? <td>{item.className}</td> : null}
+                    <td>
+                      <button type="button" className="table-link-btn" onClick={() => void openStudentHistory(item)}>
+                        {item.studentName}
+                      </button>
+                    </td>
+                    <td>{item.rollNumber ?? "-"}</td>
+                    <td>{item.presentCount}/{item.totalClasses}</td>
+                    <td>{item.attendanceRate}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+        <div className="toolbar row-wrap">
+          <button
+            type="button"
+            className="ghost-btn"
+            disabled={classViewPage <= 1}
+            onClick={() => setClassViewPage((current) => Math.max(1, current - 1))}
+          >
+            {t("common.previous")}
+          </button>
+          <p className="progress-text">{t("reports.pageOf", { page: classViewPage, totalPages: classViewTotalPages })}</p>
+          <button
+            type="button"
+            className="ghost-btn"
+            disabled={classViewPage >= classViewTotalPages}
+            onClick={() => setClassViewPage((current) => current + 1)}
+          >
+            {t("common.next")}
+          </button>
+        </div>
+      </section>
+
+      <section className="simple-panel reports-panel">
         {isLoading ? <InlineLoader label={t("reports.loadingTimeline")} /> : null}
-        {!isLoading && items.length === 0 ? <p>{t("reports.noData")}</p> : null}
+        {!isLoading && items.length === 0 ? <div className="empty-state">{t("reports.noData")}</div> : null}
         {!isLoading && items.length > 0 ? (
           <div className="table-scroll">
             <table className="data-table">
@@ -1350,6 +1515,71 @@ function ReportsPage({ requestWithAuth, requestWithAuthRaw }: { requestWithAuth:
           </button>
         </div>
       </section>
+
+      {(studentHistoryLoading || selectedStudent || studentHistoryError) ? (
+        <div className="modal-backdrop" role="presentation" onClick={() => { setSelectedStudent(null); setStudentHistoryError(null); }}>
+          <div className="modal-card student-history-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <div className="section-heading">
+                <h2>{t("reports.studentRecordTitle")}</h2>
+                <p>
+                  {selectedStudent
+                    ? t("reports.studentRecordFor", {
+                        student: selectedStudent.student.studentName,
+                        className: selectedStudent.student.className
+                      })
+                    : t("reports.studentRecordSubtitle")}
+                </p>
+              </div>
+              <button type="button" className="icon-btn" aria-label={t("common.close")} onClick={() => { setSelectedStudent(null); setStudentHistoryError(null); }}>
+                <X size={16} />
+              </button>
+            </div>
+
+            {studentHistoryLoading ? <InlineLoader label={t("reports.loadingStudentRecord")} /> : null}
+            {studentHistoryError ? <p className="error-text">{studentHistoryError}</p> : null}
+            {selectedStudent ? (
+              <>
+                <div className="student-history-summary">
+                  <article className="student-history-stat">
+                    <span>{t("reports.colStudent")}</span>
+                    <strong>{selectedStudent.student.studentName}</strong>
+                  </article>
+                  <article className="student-history-stat">
+                    <span>{t("reports.colAttendanceSummary")}</span>
+                    <strong>{selectedStudent.summary.presentCount}/{selectedStudent.summary.totalClasses}</strong>
+                  </article>
+                  <article className="student-history-stat">
+                    <span>{t("reports.colRate")}</span>
+                    <strong>{selectedStudent.summary.attendanceRate}%</strong>
+                  </article>
+                </div>
+
+                {selectedStudent.items.length === 0 ? <div className="empty-state">{t("reports.noStudentRecordData")}</div> : (
+                  <div className="table-scroll">
+                    <table className="data-table student-history-table">
+                      <thead>
+                        <tr>
+                          <th>{t("reports.colDate")}</th>
+                          <th>{t("reports.status")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedStudent.items.map((item) => (
+                          <tr key={`${selectedStudent.student.studentId}-${item.attendanceDate}`}>
+                            <td>{item.attendanceDate}</td>
+                            <td>{t(statusLabel[item.status])}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
