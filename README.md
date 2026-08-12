@@ -139,6 +139,7 @@ through the Vercel `/api` proxy so refresh cookies work correctly.
 
 - [Deployment steps](DEPLOYMENT_STEPS.md) - Vercel, Render, Atlas, and GitHub Actions
 - [Production runbook](PRODUCTION.md) - alternative single-container deployment
+- [Meta WhatsApp Cloud API setup](META_WHATSAPP_CLOUD_API.md) - direct automated WhatsApp messaging
 - [Product requirements](PRD.md) - implemented scope and product history
 - [QA report](QA_TEST_REPORT_2026-07-31.md) - acceptance and regression results
 
