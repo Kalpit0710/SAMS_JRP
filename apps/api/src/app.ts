@@ -14,6 +14,7 @@ import { recordRequestMetric } from "./lib/metrics.js";
 import { auditLogMiddleware } from "./middleware/audit-log.middleware.js";
 import { auditRouter } from "./modules/audit/audit.route.js";
 import { attendanceRouter } from "./modules/attendance/attendance.route.js";
+import { teacherAttendanceRouter } from "./modules/teacher-attendance/teacher-attendance.route.js";
 import { authRouter } from "./modules/auth/auth.route.js";
 import { dataTransferRouter } from "./modules/data-transfer/data-transfer.route.js";
 import { masterDataRouter } from "./modules/master-data/master-data.route.js";
@@ -120,6 +121,7 @@ export function createApp() {
   app.use("/api/auth", authLimiter, authRouter);
   app.use("/api/master-data", masterDataRouter);
   app.use("/api/attendance", attendanceRouter);
+  app.use("/api/teacher-attendance", teacherAttendanceRouter);
   app.use("/api/leaves", leaveRouter);
   app.use("/api/notifications", notificationRouter);
   app.use("/api/data-transfer", dataTransferRouter);

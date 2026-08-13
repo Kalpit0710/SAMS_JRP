@@ -3,7 +3,10 @@ import { z } from "zod";
 
 dotenv.config();
 
-const resolvedMongoUri = process.env.MONGODB_URI ?? process.env.MONGO_URI;
+const resolvedMongoUri =
+  process.env.NODE_ENV === "development"
+    ? process.env.MONGODB_URI_DEV ?? process.env.MONGODB_URI ?? process.env.MONGO_URI
+    : process.env.MONGODB_URI ?? process.env.MONGO_URI;
 const resolvedAppVersion =
   process.env.APP_VERSION ?? process.env.RENDER_GIT_COMMIT ?? "1.0.0";
 

@@ -23,6 +23,7 @@ import LeavePage from "./pages/LeavePage";
 import ManagePage from "./pages/ManagePage";
 import NotificationsPage from "./pages/NotificationsPage";
 import SettingsPage from "./pages/SettingsPage";
+import TeacherAttendancePage from "./pages/TeacherAttendancePage";
 
 type BackendRole = "admin" | "teacher";
 type UiRole = BackendRole;
@@ -1702,6 +1703,7 @@ function App() {
   const navItems: Array<{ to: string; label: string; allow: UiRole[]; icon: React.ReactNode }> = [
     { to: "/dashboard", label: t("nav.dashboard"), icon: <LayoutDashboard size={20} />, allow: dashboardRoles },
     { to: "/attendance", label: t("nav.attendance"), icon: <CheckSquare size={20} />, allow: attendanceRoles },
+    { to: "/teacher-attendance", label: t("nav.teacherAttendance"), icon: <Clock size={20} />, allow: attendanceRoles },
     { to: "/leaves", label: t("nav.leaves"), icon: <CalendarDays size={20} />, allow: leaveRoles },
     { to: "/manage", label: t("nav.masterData"), icon: <Database size={20} />, allow: manageRoles },
     { to: "/alerts", label: t("nav.whatsappAlerts"), icon: <MessageCircle size={20} />, allow: notificationRoles },
@@ -1885,6 +1887,14 @@ function App() {
             element={
               <RoleGuard role={activeRole} allow={attendanceRoles}>
                 <div className="page-content fade-in"><AttendancePage requestWithAuth={requestWithAuth} role={activeRole} /></div>
+              </RoleGuard>
+            }
+          />
+          <Route
+            path="/teacher-attendance"
+            element={
+              <RoleGuard role={activeRole} allow={attendanceRoles}>
+                <TeacherAttendancePage requestWithAuth={requestWithAuth} isAdmin={activeRole === "admin"} />
               </RoleGuard>
             }
           />
