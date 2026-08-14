@@ -6,11 +6,13 @@ import { setAuditMeta } from "../../middleware/audit-log.middleware.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.middleware.js";
 import { ClassModel } from "../../models/class.model.js";
 import { LeaveRequestModel, type LeaveStatus } from "../../models/leave-request.model.js";
+import { SubstituteAssignmentModel } from "../../models/substitute-assignment.model.js";
 import { getLeaveSettings, LeaveSettingsModel } from "../../models/leave-settings.model.js";
 import { TeacherModel } from "../../models/teacher.model.js";
 import { buildWhatsAppLink, normalizePhoneNumber } from "../notifications/notification.service.js";
 import { formatDateKey, getWorkingDateKeys, todayDateKey } from "./leave-calendar.js";
 import {
+  AssignSubstituteSchema,
   CreateLeaveRequestSchema,
   LeaveAnalyticsQuerySchema,
   LeaveDecisionSchema,
@@ -101,6 +103,11 @@ async function buildLinks(record: LeaveRecord) {
 }
 
 async function serializeLeave(record: LeaveRecord) {
+  const substitute = await SubstituteAssignmentModel.findOne({
+    leaveRequestId: record._id,
+    status: "approved"
+  }).select("substituteTeacherId substituteTeacherName classId className dates fromDate toDate note").lean();
+
   return {
     ...record,
     fromDateLabel: formatDateKey(record.fromDate),
@@ -109,6 +116,13 @@ async function serializeLeave(record: LeaveRecord) {
     approvedToDateLabel: record.approvedToDate ? formatDateKey(record.approvedToDate) : undefined,
     requestedWorkingDays: record.requestedWorkingDates.length,
     approvedWorkingDays: record.approvedWorkingDates.length,
+    substitute: substitute
+      ? {
+          ...substitute,
+          fromDateLabel: formatDateKey(substitute.fromDate),
+          toDateLabel: formatDateKey(substitute.toDate)
+        }
+      : null,
     ...(await buildLinks(record))
   };
 }
@@ -362,6 +376,10 @@ leaveRouter.post(
     if (!record2) {
       return res.status(409).json({ message: "This application was already updated" });
     }
+    await SubstituteAssignmentModel.updateMany(
+      { leaveRequestId: record._id, status: "approved" },
+      { $set: { status: "cancelled", cancelledBy: req.auth!.userId, cancelledAt: new Date() } }
+    );
     setAuditMeta(res, { action: "LEAVE_REQUEST_WITHDRAW", resource: "leave/request", metadata: { leaveId: String(req.params.id), previousStatus: record.status } });
     return res.status(200).json({ item: await serializeLeave(asRecord(record2)) });
   })
@@ -402,8 +420,118 @@ leaveRouter.post(
     if (!updated) {
       return res.status(409).json({ message: "This application was already updated" });
     }
+    await SubstituteAssignmentModel.updateMany(
+      { leaveRequestId: updated._id, status: "approved" },
+      { $set: { status: "cancelled", cancelledBy: req.auth!.userId, cancelledAt: new Date() } }
+    );
     setAuditMeta(res, { action: "LEAVE_REQUEST_REVOKE", resource: "leave/request", metadata: { leaveId: String(req.params.id), previousStatus: existing.status } });
     return res.status(200).json({ item: await serializeLeave(asRecord(updated)) });
+  })
+);
+
+leaveRouter.post(
+  "/:id/substitute",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const parsed = AssignSubstituteSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid substitute payload", errors: parsed.error.flatten() });
+    }
+    if (!mongoose.Types.ObjectId.isValid(parsed.data.substituteTeacherId)) {
+      return res.status(400).json({ message: "Invalid substitute teacher identifier" });
+    }
+    const leave = await LeaveRequestModel.findOne({
+      _id: String(req.params.id),
+      status: { $in: ["approved", "partially_approved"] }
+    }).lean();
+    if (!leave) {
+      return res.status(409).json({ message: "A substitute can only cover an approved leave" });
+    }
+    if (!leave.classId) {
+      return res.status(409).json({ message: "This teacher has no class that needs cover" });
+    }
+    if (leave.activeDates.length === 0) {
+      return res.status(409).json({ message: "This leave has no approved working days" });
+    }
+    if (String(leave.teacherId) === parsed.data.substituteTeacherId) {
+      return res.status(400).json({ message: "A teacher cannot cover their own leave" });
+    }
+
+    const substitute = await TeacherModel.findOne({ _id: parsed.data.substituteTeacherId, isActive: true }).lean();
+    if (!substitute) {
+      return res.status(404).json({ message: "Substitute teacher not found" });
+    }
+    const clash = await LeaveRequestModel.exists({
+      teacherId: substitute._id,
+      status: { $in: ["approved", "partially_approved"] },
+      activeDates: { $in: leave.activeDates }
+    });
+    if (clash) {
+      return res.status(409).json({ message: "The selected substitute is on leave during these dates" });
+    }
+
+    const dates = [...leave.activeDates].sort();
+    await SubstituteAssignmentModel.updateMany(
+      { leaveRequestId: leave._id, status: "approved" },
+      { $set: { status: "cancelled", cancelledBy: req.auth!.userId, cancelledAt: new Date() } }
+    );
+    const created = await SubstituteAssignmentModel.create({
+      leaveRequestId: leave._id,
+      classId: leave.classId,
+      className: leave.className ?? "",
+      absentTeacherId: leave.teacherId,
+      absentTeacherName: leave.teacherName,
+      substituteTeacherId: substitute._id,
+      substituteTeacherName: substitute.fullName,
+      substituteUserId: substitute.userId,
+      dates,
+      fromDate: dates[0],
+      toDate: dates[dates.length - 1],
+      note: parsed.data.note,
+      approvedBy: req.auth!.userId
+    });
+
+    setAuditMeta(res, {
+      action: "LEAVE_SUBSTITUTE_ASSIGN",
+      resource: "leave/substitute",
+      metadata: { leaveId: String(leave._id), substituteTeacherId: String(substitute._id), days: dates.length }
+    });
+    const updated = await LeaveRequestModel.findById(leave._id).lean();
+    return res.status(201).json({ item: await serializeLeave(asRecord(updated)), substitute: created });
+  })
+);
+
+leaveRouter.delete(
+  "/:id/substitute",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const result = await SubstituteAssignmentModel.updateMany(
+      { leaveRequestId: String(req.params.id), status: "approved" },
+      { $set: { status: "cancelled", cancelledBy: req.auth!.userId, cancelledAt: new Date() } }
+    );
+    if (result.modifiedCount === 0) {
+      return res.status(404).json({ message: "No active substitute cover found for this leave" });
+    }
+    setAuditMeta(res, {
+      action: "LEAVE_SUBSTITUTE_CANCEL",
+      resource: "leave/substitute",
+      metadata: { leaveId: String(req.params.id) }
+    });
+    const updated = await LeaveRequestModel.findById(String(req.params.id)).lean();
+    return res.status(200).json({ item: updated ? await serializeLeave(asRecord(updated)) : null });
+  })
+);
+
+leaveRouter.get(
+  "/substitutes/me",
+  requireRoles(["teacher"]),
+  asyncHandler(async (req, res) => {
+    const items = await SubstituteAssignmentModel.find({
+      substituteUserId: new mongoose.Types.ObjectId(req.auth!.userId),
+      status: "approved",
+      toDate: { $gte: todayDateKey() }
+    }).sort({ fromDate: 1 }).lean();
+    return res.status(200).json({ items });
   })
 );
 

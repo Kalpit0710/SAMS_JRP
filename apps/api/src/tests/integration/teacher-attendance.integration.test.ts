@@ -7,6 +7,8 @@ import { AuditLogModel } from "../../models/audit-log.model.js";
 import { ClassModel } from "../../models/class.model.js";
 import { DeviceSessionModel } from "../../models/device-session.model.js";
 import { LeaveRequestModel } from "../../models/leave-request.model.js";
+import { LeaveSettingsModel } from "../../models/leave-settings.model.js";
+import { SubstituteAssignmentModel } from "../../models/substitute-assignment.model.js";
 import { TeacherModel } from "../../models/teacher.model.js";
 import { TeacherAttendanceAttemptModel, TeacherAttendanceRecordModel } from "../../models/teacher-attendance.model.js";
 import { TeacherAttendanceRequestModel } from "../../models/teacher-attendance-request.model.js";
@@ -35,6 +37,11 @@ function pastDateKey(offset: number) {
   ].join("-");
 }
 
+function weekdayOf(dateKey: string) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+}
+
 async function clearDatabase() {
   await Promise.all([
     UserModel.deleteMany({}),
@@ -42,6 +49,8 @@ async function clearDatabase() {
     ClassModel.deleteMany({}),
     TeacherModel.deleteMany({}),
     LeaveRequestModel.deleteMany({}),
+    LeaveSettingsModel.deleteMany({}),
+    SubstituteAssignmentModel.deleteMany({}),
     TeacherAttendanceRecordModel.deleteMany({}),
     TeacherAttendanceAttemptModel.deleteMany({}),
     TeacherAttendanceRequestModel.deleteMany({}),
@@ -83,13 +92,27 @@ async function setupTeacher() {
     maxLocationAccuracyMeters: 100,
     pinMinLength: 4,
     pinNumericOnly: true,
-    correctionWindowHours: 24,
-    allowAdminBackdateCorrection: true
+    timezone: "Asia/Kolkata",
+    allowCorrectionToLeave: true,
+    requireConflictResolution: true
   });
+  // Every weekday is a working day here so date-sensitive tests stay deterministic.
+  await LeaveSettingsModel.create({ nonWorkingWeekdays: [], holidays: [] });
   const agent = request.agent(app);
   const login = await agent.post("/api/auth/login").send({ username: user.username, password: "1234" });
   expect(login.status).toBe(200);
   return { agent, accessToken: login.body.accessToken as string, teacher };
+}
+
+async function setupAdmin() {
+  await UserModel.create({
+    fullName: "Attendance Admin",
+    username: "attendance.admin",
+    passwordHash: await hashPassword("Admin@12345"),
+    roles: ["admin"],
+    isActive: true
+  });
+  return loginAs("attendance.admin", "Admin@12345");
 }
 
 describe("teacher self-attendance", () => {
@@ -244,5 +267,166 @@ describe("teacher self-attendance", () => {
     const record = await TeacherAttendanceRecordModel.findOne({ teacherId: teacher._id, attendanceDate: schoolDateKey() });
     expect(record!.status).toBe("on_time");
     expect(record!.source).toBe("self");
+  }, 30000);
+
+  it("excludes weekly offs and school holidays from the absence calculation", async () => {
+    await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+    const weeklyOff = pastDateKey(2);
+    const holiday = pastDateKey(3);
+    const workingDay = pastDateKey(1);
+    await LeaveSettingsModel.updateOne(
+      {},
+      { $set: { nonWorkingWeekdays: [weekdayOf(weeklyOff)], holidays: [{ date: holiday, name: "Founders Day" }] } }
+    );
+
+    const overview = await adminAgent
+      .get(`/api/teacher-attendance/admin/overview?from=${holiday}&to=${workingDay}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    expect(overview.status).toBe(200);
+
+    const rows = overview.body.rows as Array<{ attendanceDate: string; status: string; holidayName?: string }>;
+    const byDate = new Map(rows.map((row) => [row.attendanceDate, row]));
+    expect(byDate.get(weeklyOff)!.status).toBe("non_working");
+    expect(byDate.get(holiday)!.status).toBe("non_working");
+    expect(byDate.get(holiday)!.holidayName).toBe("Founders Day");
+    expect(byDate.get(workingDay)!.status).toBe("absent");
+  }, 30000);
+
+  it("finds approved leave that falls in the middle of the requested range", async () => {
+    const { teacher } = await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+    const middle = pastDateKey(3);
+    await LeaveRequestModel.create({
+      teacherId: teacher._id,
+      teacherUserId: (await UserModel.findOne({ username: "attendance.teacher" }))!._id,
+      teacherName: teacher.fullName,
+      fromDate: middle,
+      toDate: middle,
+      reason: "Approved leave",
+      requestedWorkingDates: [middle],
+      approvedWorkingDates: [middle],
+      activeDates: [middle],
+      status: "approved"
+    });
+
+    const overview = await adminAgent
+      .get(`/api/teacher-attendance/admin/overview?from=${pastDateKey(6)}&to=${pastDateKey(1)}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    const rows = overview.body.rows as Array<{ attendanceDate: string; status: string }>;
+    expect(rows.find((row) => row.attendanceDate === middle)!.status).toBe("on_leave");
+  }, 30000);
+
+  it("blocks self-attendance on a partially approved leave date", async () => {
+    const { agent, accessToken, teacher } = await setupTeacher();
+    await LeaveRequestModel.create({
+      teacherId: teacher._id,
+      teacherUserId: (await UserModel.findOne({ username: "attendance.teacher" }))!._id,
+      teacherName: teacher.fullName,
+      fromDate: schoolDateKey(),
+      toDate: schoolDateKey(),
+      reason: "Partially approved leave",
+      requestedWorkingDates: [schoolDateKey()],
+      approvedWorkingDates: [schoolDateKey()],
+      activeDates: [schoolDateKey()],
+      status: "partially_approved"
+    });
+
+    const blocked = await agent
+      .post("/api/teacher-attendance/mark")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ location: { lat: 28.6139, lng: 77.209, accuracyMeters: 10 } });
+    expect(blocked.body.code).toBe("TEACHER_ATTENDANCE_ON_LEAVE");
+  }, 30000);
+
+  it("raises a conflict when leave is approved after attendance was marked, and resolves it", async () => {
+    const { agent, accessToken, teacher } = await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+    const marked = await agent
+      .post("/api/teacher-attendance/mark")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ location: { lat: 28.6139, lng: 77.209, accuracyMeters: 10 } });
+    expect(marked.status).toBe(201);
+
+    await LeaveRequestModel.create({
+      teacherId: teacher._id,
+      teacherUserId: (await UserModel.findOne({ username: "attendance.teacher" }))!._id,
+      teacherName: teacher.fullName,
+      fromDate: schoolDateKey(),
+      toDate: schoolDateKey(),
+      reason: "Retrospective leave",
+      requestedWorkingDates: [schoolDateKey()],
+      approvedWorkingDates: [schoolDateKey()],
+      activeDates: [schoolDateKey()],
+      status: "approved"
+    });
+
+    const conflicted = await adminAgent
+      .get(`/api/teacher-attendance/admin/overview?from=${schoolDateKey()}&to=${schoolDateKey()}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    const conflictRow = (conflicted.body.rows as Array<{ status: string; record: { _id: string } | null }>)[0];
+    expect(conflictRow.status).toBe("conflict");
+
+    const resolved = await adminAgent
+      .patch(`/api/teacher-attendance/admin/${conflictRow.record!._id}/resolve-conflict`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ resolution: "apply_leave", note: "Teacher left right after checking in" });
+    expect(resolved.status).toBe(200);
+
+    const after = await adminAgent
+      .get(`/api/teacher-attendance/admin/overview?from=${schoolDateKey()}&to=${schoolDateKey()}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    expect((after.body.rows as Array<{ status: string }>)[0].status).toBe("on_leave");
+  }, 30000);
+
+  it("allows a correction long after the date and keeps the original status for audit", async () => {
+    const { agent, accessToken, teacher } = await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+    const longAgo = pastDateKey(120);
+
+    const created = await agent
+      .post("/api/teacher-attendance/requests")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ attendanceDate: longAgo, requestType: "manual", requestedStatus: "on_time", reason: "App was not working that day" });
+    expect(created.status).toBe(201);
+    expect(created.body.item.originalStatus).toBe("absent");
+
+    const reviewed = await adminAgent
+      .patch(`/api/teacher-attendance/admin/requests/${created.body.item._id}/review`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ decision: "approved" });
+    expect(reviewed.status).toBe(200);
+
+    const record = await TeacherAttendanceRecordModel.findOne({ teacherId: teacher._id, attendanceDate: longAgo });
+    expect(record!.status).toBe("on_time");
+    expect(record!.originalStatus).toBe("absent");
+  }, 30000);
+
+  it("rejects a correction request for a non-working day", async () => {
+    const { agent, accessToken } = await setupTeacher();
+    await LeaveSettingsModel.updateOne({}, { $set: { holidays: [{ date: pastDateKey(2), name: "School holiday" }] } });
+
+    const blocked = await agent
+      .post("/api/teacher-attendance/requests")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ attendanceDate: pastDateKey(2), requestType: "manual", requestedStatus: "on_time", reason: "Tried to mark" });
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.code).toBe("TEACHER_ATTENDANCE_NON_WORKING_DAY");
+  }, 30000);
+
+  it("excludes non-working days from the attendance report denominator", async () => {
+    await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+    const holiday = pastDateKey(3);
+    await LeaveSettingsModel.updateOne({}, { $set: { nonWorkingWeekdays: [], holidays: [{ date: holiday, name: "School holiday" }] } });
+
+    const report = await adminAgent
+      .get(`/api/teacher-attendance/admin/report?from=${pastDateKey(7)}&to=${pastDateKey(1)}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    expect(report.status).toBe(200);
+    // Seven calendar days minus the single holiday.
+    expect(report.body.items[0].workingDays).toBe(6);
+    expect(report.body.items[0].absent).toBe(6);
+    expect(report.body.items[0].attendanceRate).toBe(0);
   }, 30000);
 });

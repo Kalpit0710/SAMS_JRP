@@ -52,6 +52,11 @@ export const LeaveRevokeSchema = z.object({
   note: z.string().trim().min(3).max(1000)
 });
 
+export const AssignSubstituteSchema = z.object({
+  substituteTeacherId: z.string().min(1),
+  note: z.string().trim().max(1000).optional()
+});
+
 export const LeaveAnalyticsQuerySchema = z.object({
   fromDate: DateKeySchema,
   toDate: DateKeySchema,

@@ -1,6 +1,10 @@
 import { z } from "zod";
+import { TEACHER_DAY_STATUSES, timeToMinutes } from "./attendance-day.js";
+
+export { timeToMinutes };
 
 const TimeSchema = z.string().regex(/^\d{2}:\d{2}$/, "Time must use HH:mm");
+const DateKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 
 export const MarkTeacherAttendanceSchema = z.object({
   location: z.object({
@@ -23,8 +27,9 @@ export const TeacherAttendanceSettingsSchema = z.object({
   maxLocationAccuracyMeters: z.number().finite().positive().nullable(),
   pinMinLength: z.number().int().min(4).max(32),
   pinNumericOnly: z.boolean(),
-  correctionWindowHours: z.number().finite().nonnegative(),
-  allowAdminBackdateCorrection: z.boolean()
+  timezone: z.string().trim().min(1),
+  allowCorrectionToLeave: z.boolean(),
+  requireConflictResolution: z.boolean()
 }).superRefine((value, context) => {
   const start = timeToMinutes(value.markWindowStart);
   const end = timeToMinutes(value.markWindowEnd);
@@ -34,17 +39,29 @@ export const TeacherAttendanceSettingsSchema = z.object({
   } else if (threshold < start || threshold > end) {
     context.addIssue({ code: "custom", path: ["inTimeThreshold"], message: "Threshold must be within the mark window" });
   }
+  try {
+    new Intl.DateTimeFormat("en-CA", { timeZone: value.timezone });
+  } catch {
+    context.addIssue({ code: "custom", path: ["timezone"], message: "Unknown school timezone" });
+  }
 });
 
 export const TeacherAttendanceHistorySchema = z.object({
-  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  from: DateKeySchema.optional(),
+  to: DateKeySchema.optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(30)
 });
 
 export const TeacherAttendanceOverviewSchema = TeacherAttendanceHistorySchema.extend({
-  status: z.enum(["on_time", "late", "on_leave", "corrected", "missed"]).optional(),
+  status: z.enum(TEACHER_DAY_STATUSES).optional(),
+  teacherId: z.string().optional(),
+  classId: z.string().optional()
+});
+
+export const TeacherAttendanceReportSchema = z.object({
+  from: DateKeySchema,
+  to: DateKeySchema,
   teacherId: z.string().optional(),
   classId: z.string().optional()
 });
@@ -55,7 +72,7 @@ export const CorrectTeacherAttendanceSchema = z.object({
 });
 
 export const CreateAttendanceRequestSchema = z.object({
-  attendanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  attendanceDate: DateKeySchema,
   requestType: z.enum(["correction", "manual"]),
   requestedStatus: z.enum(["on_time", "late", "on_leave"]),
   reason: z.string().trim().min(3).max(1000)
@@ -72,10 +89,7 @@ export const ReviewAttendanceRequestSchema = z.object({
   decisionNote: z.string().trim().max(1000).optional()
 });
 
-export function timeToMinutes(value: string): number | null {
-  const match = /^(\d{2}):(\d{2})$/.exec(value);
-  if (!match) return null;
-  const hours = Number(match[1]);
-  const minutes = Number(match[2]);
-  return hours <= 23 && minutes <= 59 ? hours * 60 + minutes : null;
-}
+export const ResolveAttendanceConflictSchema = z.object({
+  resolution: z.enum(["keep_attendance", "apply_leave"]),
+  note: z.string().trim().min(3).max(1000)
+});

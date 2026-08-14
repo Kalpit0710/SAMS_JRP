@@ -8,6 +8,7 @@ import { ClassModel } from "../../models/class.model.js";
 import { DeviceSessionModel } from "../../models/device-session.model.js";
 import { LeaveRequestModel } from "../../models/leave-request.model.js";
 import { LeaveSettingsModel } from "../../models/leave-settings.model.js";
+import { SubstituteAssignmentModel } from "../../models/substitute-assignment.model.js";
 import { TeacherModel } from "../../models/teacher.model.js";
 import { UserModel, hashPassword } from "../../models/user.model.js";
 
@@ -40,6 +41,7 @@ async function clearDatabase() {
     TeacherModel.deleteMany({}),
     LeaveRequestModel.deleteMany({}),
     LeaveSettingsModel.deleteMany({}),
+    SubstituteAssignmentModel.deleteMany({}),
     AuditLogModel.deleteMany({})
   ]);
 }
@@ -489,5 +491,106 @@ describe("teacher leave management", () => {
       .set("Authorization", `Bearer ${adminToken}`)
       .send({ note: "Trying to undo an ongoing leave" });
     expect(blockedOngoing.status).toBe(409);
+  });
+
+  it("lets an admin assign a substitute who then gets temporary access to the covered class", async () => {
+    await UserModel.create({
+      fullName: "Leave Admin",
+      username: "leave.admin",
+      passwordHash: await hashPassword("Admin@12345"),
+      roles: ["admin"],
+      isActive: true
+    });
+    const teacherUser = await UserModel.create({
+      fullName: "Leave Teacher",
+      username: "leave.teacher",
+      passwordHash: await hashPassword("Teacher@12345"),
+      roles: ["teacher"],
+      isActive: true
+    });
+    const coverUser = await UserModel.create({
+      fullName: "Cover Teacher",
+      username: "cover.teacher",
+      passwordHash: await hashPassword("Teacher@12345"),
+      roles: ["teacher"],
+      isActive: true
+    });
+    const classDoc = await ClassModel.create({ name: "Class Leave" });
+    const coverClass = await ClassModel.create({ name: "Class Cover" });
+    const teacher = await TeacherModel.create({
+      userId: teacherUser._id,
+      fullName: "Leave Teacher",
+      classId: classDoc._id,
+      isActive: true
+    });
+    const coverTeacher = await TeacherModel.create({
+      userId: coverUser._id,
+      fullName: "Cover Teacher",
+      classId: coverClass._id,
+      isActive: true
+    });
+
+    const leaveDate = futureDateKey(3);
+    const { agent: adminAgent, accessToken: adminToken } = await loginAs("leave.admin", "Admin@12345");
+    await adminAgent
+      .put("/api/leaves/settings")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ adminWhatsAppNumber: "", nonWorkingWeekdays: [], holidays: [] });
+
+    const leave = await LeaveRequestModel.create({
+      teacherId: teacher._id,
+      teacherUserId: teacherUser._id,
+      teacherName: teacher.fullName,
+      classId: classDoc._id,
+      className: classDoc.name,
+      fromDate: leaveDate,
+      toDate: leaveDate,
+      reason: "Family function",
+      requestedWorkingDates: [leaveDate],
+      approvedWorkingDates: [leaveDate],
+      activeDates: [leaveDate],
+      status: "approved"
+    });
+
+    const selfCover = await adminAgent
+      .post(`/api/leaves/${leave._id}/substitute`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ substituteTeacherId: String(teacher._id) });
+    expect(selfCover.status).toBe(400);
+
+    const assigned = await adminAgent
+      .post(`/api/leaves/${leave._id}/substitute`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ substituteTeacherId: String(coverTeacher._id), note: "Covering the morning classes" });
+    expect(assigned.status).toBe(201);
+    expect(assigned.body.item.substitute.substituteTeacherName).toBe("Cover Teacher");
+    expect(assigned.body.item.substitute.dates).toEqual([leaveDate]);
+
+    const { agent: coverAgent, accessToken: coverToken } = await loginAs("cover.teacher", "Teacher@12345");
+    const mine = await coverAgent
+      .get("/api/leaves/substitutes/me")
+      .set("Authorization", `Bearer ${coverToken}`);
+    expect(mine.status).toBe(200);
+    expect(mine.body.items).toHaveLength(1);
+
+    const coveredDay = await coverAgent
+      .get(`/api/attendance/class/${classDoc._id}?date=${leaveDate}`)
+      .set("Authorization", `Bearer ${coverToken}`);
+    expect(coveredDay.status).toBe(200);
+
+    const uncoveredDay = await coverAgent
+      .get(`/api/attendance/class/${classDoc._id}?date=${futureDateKey(9)}`)
+      .set("Authorization", `Bearer ${coverToken}`);
+    expect(uncoveredDay.status).toBe(403);
+
+    const cancelled = await adminAgent
+      .delete(`/api/leaves/${leave._id}/substitute`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    expect(cancelled.status).toBe(200);
+
+    const afterCancel = await coverAgent
+      .get(`/api/attendance/class/${classDoc._id}?date=${leaveDate}`)
+      .set("Authorization", `Bearer ${coverToken}`);
+    expect(afterCancel.status).toBe(403);
   });
 });

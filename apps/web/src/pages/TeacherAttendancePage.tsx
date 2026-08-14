@@ -34,8 +34,22 @@ type AttendanceRecord = {
   checkInAtServer?: string;
   status: "on_time" | "late" | "on_leave" | "corrected";
   correctedToStatus?: "on_time" | "late" | "on_leave";
+  originalStatus?: string;
+  source?: "self" | "admin_correction" | "system_leave_sync" | "manual_application";
+  conflictResolution?: "keep_attendance" | "apply_leave";
   distanceMeters?: number;
 };
+
+type DayStatus =
+  | "non_working"
+  | "not_due"
+  | "pending"
+  | "present"
+  | "late"
+  | "on_leave"
+  | "absent"
+  | "correction_requested"
+  | "conflict";
 
 type Settings = {
   enabled: boolean;
@@ -49,8 +63,9 @@ type Settings = {
   maxLocationAccuracyMeters: number | null;
   pinMinLength: number;
   pinNumericOnly: boolean;
-  correctionWindowHours: number;
-  allowAdminBackdateCorrection: boolean;
+  timezone: string;
+  allowCorrectionToLeave: boolean;
+  requireConflictResolution: boolean;
 };
 
 type OverviewRow = {
@@ -58,8 +73,16 @@ type OverviewRow = {
   teacherName: string;
   className: string;
   attendanceDate: string;
-  status: string;
-  record?: AttendanceRecord;
+  status: DayStatus;
+  effectiveStatus: "present" | "late" | "on_leave" | "absent" | null;
+  isWorkingDay: boolean;
+  isFinalized: boolean;
+  wasCorrected: boolean;
+  correctionPending: boolean;
+  correctionAvailable: boolean;
+  hasConflict: boolean;
+  holidayName?: string;
+  record?: AttendanceRecord | null;
 };
 
 type AttendanceRequestItem = {
@@ -112,10 +135,13 @@ function formatTime(value?: string) {
 }
 
 function statusTone(status: string) {
-  if (status === "on_time" || status === "corrected") return "present";
+  if (status === "present" || status === "on_time" || status === "corrected") return "present";
   if (status === "late") return "late";
-  if (status === "missed") return "absent";
+  if (status === "absent") return "absent";
   if (status === "on_leave") return "half_day";
+  if (status === "conflict") return "leave-rejected";
+  if (status === "correction_requested") return "leave-pending";
+  if (status === "pending") return "leave-pending";
   return "default";
 }
 
@@ -190,6 +216,7 @@ export default function TeacherAttendancePage({
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<TabKey>(initialTab ?? (isAdmin ? "view" : "self"));
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
+  const [myDays, setMyDays] = useState<OverviewRow[]>([]);
   const [overview, setOverview] = useState<OverviewRow[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [myRequests, setMyRequests] = useState<AttendanceRequestItem[]>([]);
@@ -219,6 +246,10 @@ export default function TeacherAttendancePage({
   const [reviewModal, setReviewModal] = useState<{ requestId: string; teacherName: string; date: string } | null>(null);
   const [decisionNoteValue, setDecisionNoteValue] = useState("");
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [conflictModal, setConflictModal] = useState<{ recordId: string; teacherName: string; date: string } | null>(null);
+  const [conflictResolution, setConflictResolution] = useState<"keep_attendance" | "apply_leave">("keep_attendance");
+  const [conflictNote, setConflictNote] = useState("");
+  const [conflictSaving, setConflictSaving] = useState(false);
 
   const changeViewMode = (mode: ViewMode) => {
     setViewMode(mode);
@@ -252,11 +283,13 @@ export default function TeacherAttendancePage({
         setSettings(policy);
         setAdminRequests(pending.items);
       } else {
-        const [result, myPending] = await Promise.all([
+        const [result, days, myPending] = await Promise.all([
           requestWithAuth<{ items: AttendanceRecord[] }>(`/teacher-attendance/me?from=${from}&to=${to}&pageSize=100`, { method: "GET" }),
+          requestWithAuth<{ rows: OverviewRow[] }>(`/teacher-attendance/me/days?from=${from}&to=${to}`, { method: "GET" }),
           requestWithAuth<{ items: AttendanceRequestItem[] }>("/teacher-attendance/requests/me?pageSize=100", { method: "GET" })
         ]);
         setRecords(result.items);
+        setMyDays(days.rows);
         setMyRequests(myPending.items);
       }
     } catch (loadError) {
@@ -429,6 +462,31 @@ export default function TeacherAttendancePage({
     setRequestReason("");
   };
 
+  const openConflictModal = (recordId: string, teacherName: string, date: string) => {
+    setConflictModal({ recordId, teacherName, date });
+    setConflictResolution("keep_attendance");
+    setConflictNote("");
+  };
+
+  const submitConflictModal = async () => {
+    if (!conflictModal || !conflictNote.trim()) return;
+    setConflictSaving(true);
+    setError(null);
+    try {
+      await requestWithAuth(`/teacher-attendance/admin/${conflictModal.recordId}/resolve-conflict`, {
+        method: "PATCH",
+        body: JSON.stringify({ resolution: conflictResolution, note: conflictNote.trim() })
+      });
+      setNotice(t("teacherAttendance.conflictResolved"));
+      setConflictModal(null);
+      await load();
+    } catch (conflictError) {
+      setError(conflictError instanceof Error ? conflictError.message : t("teacherAttendance.conflictFailed"));
+    } finally {
+      setConflictSaving(false);
+    }
+  };
+
   const submitRequestModal = async () => {
     if (!requestModal || !requestReason.trim()) return;
     setRequestSaving(true);
@@ -484,6 +542,12 @@ export default function TeacherAttendancePage({
   };
 
   const recordsByDate = useMemo(() => new Map(records.map((record) => [record.attendanceDate, record])), [records]);
+  const myDaysByDate = useMemo(() => new Map(myDays.map((row) => [row.attendanceDate, row])), [myDays]);
+
+  // Manually approved days carry a synthetic midnight timestamp, so never show it as a check-in time.
+  const recordDetail = (record: AttendanceRecord) => (record.source === "manual_application"
+    ? t("teacherAttendance.addedAfterApproval")
+    : `${t("teacherAttendance.checkIn")}: ${formatTime(record.checkInAtServer)}`);
   const overviewByDate = useMemo(() => new Map(overview.map((row) => [row.attendanceDate, row])), [overview]);
   const overviewByDateGroup = useMemo(() => {
     const map = new Map<string, OverviewRow[]>();
@@ -497,29 +561,37 @@ export default function TeacherAttendancePage({
   const scopedTeacherCount = useMemo(() => new Set(overview.map((row) => row.teacherId)).size, [overview]);
   const pendingAdminRequests = useMemo(() => adminRequests.filter((request) => request.status === "pending"), [adminRequests]);
   const decidedAdminRequests = useMemo(() => adminRequests.filter((request) => request.status !== "pending"), [adminRequests]);
-  const pendingDatesSet = useMemo(() => new Set(myRequests.filter((request) => request.status === "pending").map((request) => request.attendanceDate)), [myRequests]);
 
   const elapsedDaysInMonth = viewMonth === currentMonthKey() ? Number(todayKey().slice(-2)) : monthBounds(viewMonth).daysInMonth;
+  void elapsedDaysInMonth;
 
   const teacherSummary = useMemo(() => {
-    const present = records.filter((record) => record.status === "on_time" || record.status === "late" || record.status === "corrected").length;
-    const onLeave = records.filter((record) => record.status === "on_leave").length;
-    const missed = Math.max(elapsedDaysInMonth - present - onLeave, 0);
-    return { present, onLeave, missed, elapsed: elapsedDaysInMonth };
-  }, [records, elapsedDaysInMonth]);
+    const counted = myDays.filter((row) => row.isWorkingDay && row.effectiveStatus !== null);
+    return {
+      present: counted.filter((row) => row.effectiveStatus === "present" || row.effectiveStatus === "late").length,
+      onLeave: counted.filter((row) => row.effectiveStatus === "on_leave").length,
+      missed: counted.filter((row) => row.effectiveStatus === "absent").length,
+      elapsed: counted.length
+    };
+  }, [myDays]);
 
   const adminSummaryRows = useMemo(() => {
-    const map = new Map<string, { teacherId: string; teacherName: string; className: string; present: number; onLeave: number }>();
+    const map = new Map<string, { teacherId: string; teacherName: string; className: string; present: number; onLeave: number; missed: number; elapsed: number }>();
     for (const row of overview) {
-      const entry = map.get(row.teacherId) ?? { teacherId: row.teacherId, teacherName: row.teacherName, className: row.className, present: 0, onLeave: 0 };
-      if (row.status === "on_time" || row.status === "late" || row.status === "corrected") entry.present += 1;
-      else if (row.status === "on_leave") entry.onLeave += 1;
+      const entry = map.get(row.teacherId)
+        ?? { teacherId: row.teacherId, teacherName: row.teacherName, className: row.className, present: 0, onLeave: 0, missed: 0, elapsed: 0 };
+      if (row.isWorkingDay && row.effectiveStatus !== null) {
+        entry.elapsed += 1;
+        if (row.effectiveStatus === "present" || row.effectiveStatus === "late") entry.present += 1;
+        else if (row.effectiveStatus === "on_leave") entry.onLeave += 1;
+        else if (row.effectiveStatus === "absent") entry.missed += 1;
+      }
       map.set(row.teacherId, entry);
     }
-    return [...map.values()]
-      .map((entry) => ({ ...entry, missed: Math.max(elapsedDaysInMonth - entry.present - entry.onLeave, 0), elapsed: elapsedDaysInMonth }))
-      .sort((a, b) => a.teacherName.localeCompare(b.teacherName));
-  }, [overview, elapsedDaysInMonth]);
+    return [...map.values()].sort((a, b) => a.teacherName.localeCompare(b.teacherName));
+  }, [overview]);
+
+  const conflictRows = useMemo(() => overview.filter((row) => row.hasConflict), [overview]);
 
   if (loading) {
     return (
@@ -670,10 +742,42 @@ export default function TeacherAttendancePage({
             <>
               <div className="ta-stat-grid">
                 <div className="ta-stat"><span className="ta-stat-label"><Users size={14} aria-hidden="true" />{t("teacherAttendance.totalTeachers")}</span><strong>{scopedTeacherCount}</strong></div>
-                <div className="ta-stat success"><span className="ta-stat-label">{t("teacherAttendance.onTime")}</span><strong>{overview.filter((row) => row.status === "on_time").length}</strong></div>
+                <div className="ta-stat success"><span className="ta-stat-label">{t("teacherAttendance.onTime")}</span><strong>{overview.filter((row) => row.status === "present").length}</strong></div>
                 <div className="ta-stat warning"><span className="ta-stat-label">{t("teacherAttendance.lateCount")}</span><strong>{overview.filter((row) => row.status === "late").length}</strong></div>
-                <div className="ta-stat danger"><span className="ta-stat-label">{t("teacherAttendance.missedCount")}</span><strong>{overview.filter((row) => row.status === "missed").length}</strong></div>
+                <div className="ta-stat danger"><span className="ta-stat-label">{t("teacherAttendance.missedCount")}</span><strong>{overview.filter((row) => row.status === "absent").length}</strong></div>
               </div>
+
+              {conflictRows.length > 0 ? (
+                <section className="ta-card ta-conflict-card">
+                  <div className="ta-card-header">
+                    <div className="ta-card-title">
+                      <span className="ta-card-icon"><ShieldAlert size={18} aria-hidden="true" /></span>
+                      <div><h3>{t("teacherAttendance.conflictsTitle")}</h3><p>{t("teacherAttendance.conflictsHint")}</p></div>
+                    </div>
+                  </div>
+                  <ul className="ta-row-list">
+                    {conflictRows.map((row) => (
+                      <li className="ta-row" key={`conflict-${row.teacherId}-${row.attendanceDate}`}>
+                        <div className="ta-row-main">
+                          <span className="ta-avatar" aria-hidden="true">{row.teacherName.trim().charAt(0).toUpperCase()}</span>
+                          <div className="ta-row-text">
+                            <strong>{row.teacherName}</strong>
+                            <small>{formatDate(row.attendanceDate)}</small>
+                          </div>
+                        </div>
+                        <div className="ta-row-side">
+                          <span className="status-badge leave-rejected">{t("teacherAttendance.status.conflict")}</span>
+                          {row.record ? (
+                            <button type="button" className="ta-btn ghost small" onClick={() => openConflictModal(row.record!._id, row.teacherName, row.attendanceDate)}>
+                              {t("teacherAttendance.resolveConflict")}
+                            </button>
+                          ) : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
 
               <section className="ta-card ta-filter-bar">
                 <label className="ta-field">{t("teacherAttendance.filterClass")}
@@ -725,25 +829,26 @@ export default function TeacherAttendancePage({
                 {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => <span className="ta-calendar-weekday" key={day}>{day}</span>)}
                 {buildCalendarCells(viewMonth).map((date, index) => {
                   if (!date) return <span className="ta-calendar-cell empty" key={`empty-${index}`} />;
+                  const day = myDaysByDate.get(date);
                   const record = recordsByDate.get(date);
                   const isFuture = date > todayKey();
-                  const isPending = pendingDatesSet.has(date);
-                  const tone = record ? statusTone(record.status) : isFuture ? "" : "absent";
+                  const tone = day ? statusTone(day.status) : "";
+                  const canAct = Boolean(day?.correctionAvailable);
                   return (
                     <button
                       type="button"
                       key={date}
-                      className={`ta-calendar-cell ${tone} ${date === todayKey() ? "is-today" : ""}`}
-                      disabled={isFuture}
+                      className={`ta-calendar-cell ${tone} ${day && !day.isWorkingDay ? "non-working" : ""} ${date === todayKey() ? "is-today" : ""}`}
+                      disabled={isFuture || !canAct}
                       onClick={() => {
-                        if (isFuture || isPending) return;
+                        if (!canAct) return;
                         if (record) openRequestModal("correction", date, record._id);
                         else openRequestModal("manual", date);
                       }}
-                      title={record ? t(`teacherAttendance.status.${record.status}`, { defaultValue: record.status }) : undefined}
+                      title={day ? day.holidayName ?? t(`teacherAttendance.status.${day.status}`, { defaultValue: day.status }) : undefined}
                     >
                       <span className="ta-calendar-date">{Number(date.slice(-2))}</span>
-                      {isPending ? <span className="ta-calendar-pending-dot" aria-hidden="true" /> : null}
+                      {day?.correctionPending ? <span className="ta-calendar-pending-dot" aria-hidden="true" /> : null}
                     </button>
                   );
                 })}
@@ -758,15 +863,19 @@ export default function TeacherAttendancePage({
                     if (!date) return <span className="ta-calendar-cell empty" key={`empty-${index}`} />;
                     const row = overviewByDate.get(date);
                     const isFuture = date > todayKey();
-                    const tone = row ? statusTone(row.status) : isFuture ? "" : "absent";
+                    const tone = row ? statusTone(row.status) : "";
                     return (
                       <button
                         type="button"
                         key={date}
-                        className={`ta-calendar-cell ${tone} ${date === todayKey() ? "is-today" : ""}`}
+                        className={`ta-calendar-cell ${tone} ${row && !row.isWorkingDay ? "non-working" : ""} ${date === todayKey() ? "is-today" : ""}`}
                         disabled={isFuture || !row?.record}
-                        onClick={() => { if (row?.record) void correct(row.record._id); }}
-                        title={row ? t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status }) : undefined}
+                        onClick={() => {
+                          if (!row?.record) return;
+                          if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, date);
+                          else void correct(row.record._id);
+                        }}
+                        title={row ? row.holidayName ?? t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status }) : undefined}
                       >
                         <span className="ta-calendar-date">{Number(date.slice(-2))}</span>
                       </button>
@@ -787,40 +896,64 @@ export default function TeacherAttendancePage({
                       <strong>{row.teacherName}</strong>
                       <small>{row.className}</small>
                       <small>{formatDate(row.attendanceDate)}</small>
-                      {row.record ? <button type="button" className="ta-btn ghost small" onClick={() => void correct(row.record!._id)}>{t("teacherAttendance.correct")}</button> : null}
+                      {row.holidayName ? <small className="ta-pending-label">{row.holidayName}</small> : null}
+                      {row.record ? (
+                        <button
+                          type="button"
+                          className="ta-btn ghost small"
+                          onClick={() => row.hasConflict
+                            ? openConflictModal(row.record!._id, row.teacherName, row.attendanceDate)
+                            : void correct(row.record!._id)}
+                        >
+                          {row.hasConflict ? t("teacherAttendance.resolveConflict") : t("teacherAttendance.correct")}
+                        </button>
+                      ) : null}
                     </div>
-                  )) : overviewByDateGroup.map(([date, rows]) => (
-                    <div className="ta-tile ta-tile-day" key={date}>
-                      <strong>{formatDate(date)}</strong>
-                      <small>{rows.filter((row) => row.status === "on_time").length} {t("teacherAttendance.onTime").toLowerCase()} · {rows.filter((row) => row.status === "late").length} {t("teacherAttendance.lateCount").toLowerCase()} · {rows.filter((row) => row.status === "missed").length} {t("teacherAttendance.missedCount").toLowerCase()}</small>
-                      <div className="ta-day-teacher-chips">
-                        {rows.map((row) => (
-                          <button
-                            type="button"
-                            key={row.teacherId}
-                            className={`ta-teacher-chip ${statusTone(row.status)}`}
-                            onClick={() => { if (row.record) void correct(row.record._id); }}
-                            title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}`}
-                          >
-                            {row.teacherName}
-                          </button>
-                        ))}
+                  )) : overviewByDateGroup.map(([date, rows]) => {
+                    const nonWorking = rows.every((row) => !row.isWorkingDay);
+                    return (
+                      <div className={`ta-tile ta-tile-day ${nonWorking ? "is-non-working" : ""}`} key={date}>
+                        <strong>{formatDate(date)}</strong>
+                        {nonWorking ? (
+                          <small>{rows[0]?.holidayName ?? t("teacherAttendance.status.non_working")}</small>
+                        ) : (
+                          <>
+                            <small>{rows.filter((row) => row.status === "present").length} {t("teacherAttendance.onTime").toLowerCase()} · {rows.filter((row) => row.status === "late").length} {t("teacherAttendance.lateCount").toLowerCase()} · {rows.filter((row) => row.status === "absent").length} {t("teacherAttendance.missedCount").toLowerCase()}</small>
+                            <div className="ta-day-teacher-chips">
+                              {rows.map((row) => (
+                                <button
+                                  type="button"
+                                  key={row.teacherId}
+                                  className={`ta-teacher-chip ${statusTone(row.status)}`}
+                                  onClick={() => {
+                                    if (!row.record) return;
+                                    if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, row.attendanceDate);
+                                    else void correct(row.record._id);
+                                  }}
+                                  title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}`}
+                                >
+                                  {row.teacherName}
+                                </button>
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </div>
-                    </div>
-                  ))
-                ) : buildCalendarCells(viewMonth).filter((date): date is string => date !== null && date <= todayKey()).map((date) => {
-                  const record = recordsByDate.get(date);
-                  const isPending = pendingDatesSet.has(date);
+                    );
+                  })
+                ) : myDays.filter((row) => row.attendanceDate <= todayKey()).map((row) => {
+                  const record = recordsByDate.get(row.attendanceDate);
                   return (
-                    <div className="ta-tile" key={date}>
-                      <span className={`status-badge ${record ? statusTone(record.status) : "absent"}`}>{record ? t(`teacherAttendance.status.${record.status}`, { defaultValue: record.status }) : t("teacherAttendance.status.missed")}</span>
-                      <strong>{formatDate(date)}</strong>
-                      {record ? <small>{t("teacherAttendance.checkIn")}: {formatTime(record.checkInAtServer)}</small> : null}
-                      {isPending ? <small className="ta-pending-label">{t("teacherAttendance.requestPending")}</small> : (
-                        <button type="button" className="ta-btn ghost small" onClick={() => record ? openRequestModal("correction", date, record._id) : openRequestModal("manual", date)}>
+                    <div className="ta-tile" key={row.attendanceDate}>
+                      <span className={`status-badge ${statusTone(row.status)}`}>{t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}</span>
+                      <strong>{formatDate(row.attendanceDate)}</strong>
+                      {row.holidayName ? <small className="ta-pending-label">{row.holidayName}</small> : null}
+                      {record ? <small>{recordDetail(record)}</small> : null}
+                      {row.correctionPending ? <small className="ta-pending-label">{t("teacherAttendance.requestPending")}</small> : row.correctionAvailable ? (
+                        <button type="button" className="ta-btn ghost small" onClick={() => record ? openRequestModal("correction", row.attendanceDate, record._id) : openRequestModal("manual", row.attendanceDate)}>
                           {record ? t("teacherAttendance.applyCorrection") : t("teacherAttendance.applyManual")}
                         </button>
-                      )}
+                      ) : null}
                     </div>
                   );
                 })}
@@ -845,7 +978,15 @@ export default function TeacherAttendancePage({
                         <div className="ta-row-side">
                           <span className={`status-badge ${statusTone(row.status)}`}>{t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}</span>
                           {row.record ? (
-                            <button type="button" className="ta-btn ghost small" onClick={() => void correct(row.record!._id)}>{t("teacherAttendance.correct")}</button>
+                            <button
+                              type="button"
+                              className="ta-btn ghost small"
+                              onClick={() => row.hasConflict
+                                ? openConflictModal(row.record!._id, row.teacherName, row.attendanceDate)
+                                : void correct(row.record!._id)}
+                            >
+                              {row.hasConflict ? t("teacherAttendance.resolveConflict") : t("teacherAttendance.correct")}
+                            </button>
                           ) : null}
                         </div>
                       </li>
@@ -853,52 +994,67 @@ export default function TeacherAttendancePage({
                   </ul>
                 ) : (
                   <ul className="ta-row-list">
-                    {overviewByDateGroup.map(([date, rows]) => (
-                      <li className="ta-row ta-row-grouped" key={date}>
-                        <div className="ta-row-main">
-                          <span className="ta-avatar date" aria-hidden="true"><CalendarDays size={16} /></span>
-                          <div className="ta-row-text">
-                            <strong>{formatDate(date)}</strong>
-                            <small>{rows.filter((row) => row.status === "on_time").length} {t("teacherAttendance.onTime").toLowerCase()} · {rows.filter((row) => row.status === "late").length} {t("teacherAttendance.lateCount").toLowerCase()} · {rows.filter((row) => row.status === "missed").length} {t("teacherAttendance.missedCount").toLowerCase()}</small>
+                    {overviewByDateGroup.map(([date, rows]) => {
+                      const nonWorking = rows.every((row) => !row.isWorkingDay);
+                      return (
+                        <li className={`ta-row ta-row-grouped ${nonWorking ? "is-non-working" : ""}`} key={date}>
+                          <div className="ta-row-main">
+                            <span className="ta-avatar date" aria-hidden="true"><CalendarDays size={16} /></span>
+                            <div className="ta-row-text">
+                              <strong>{formatDate(date)}</strong>
+                              <small>
+                                {nonWorking
+                                  ? rows[0]?.holidayName ?? t("teacherAttendance.status.non_working")
+                                  : `${rows.filter((row) => row.status === "present").length} ${t("teacherAttendance.onTime").toLowerCase()} · ${rows.filter((row) => row.status === "late").length} ${t("teacherAttendance.lateCount").toLowerCase()} · ${rows.filter((row) => row.status === "absent").length} ${t("teacherAttendance.missedCount").toLowerCase()}`}
+                              </small>
+                            </div>
                           </div>
-                        </div>
-                        <div className="ta-day-teacher-chips">
-                          {rows.map((row) => (
-                            <button
-                              type="button"
-                              key={row.teacherId}
-                              className={`ta-teacher-chip ${statusTone(row.status)}`}
-                              onClick={() => { if (row.record) void correct(row.record._id); }}
-                              title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}`}
-                            >
-                              {row.teacherName}
-                            </button>
-                          ))}
-                        </div>
-                      </li>
-                    ))}
+                          {nonWorking ? null : (
+                            <div className="ta-day-teacher-chips">
+                              {rows.map((row) => (
+                                <button
+                                  type="button"
+                                  key={row.teacherId}
+                                  className={`ta-teacher-chip ${statusTone(row.status)}`}
+                                  onClick={() => {
+                                    if (!row.record) return;
+                                    if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, row.attendanceDate);
+                                    else void correct(row.record._id);
+                                  }}
+                                  title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}`}
+                                >
+                                  {row.teacherName}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )
-              ) : records.length === 0 ? (
+              ) : myDays.length === 0 ? (
                 <div className="ta-empty"><History size={26} aria-hidden="true" /><p>{t("teacherAttendance.noRecords")}</p></div>
               ) : (
                 <ul className="ta-row-list">
-                  {records.map((record) => {
-                    const isPending = pendingDatesSet.has(record.attendanceDate);
+                  {myDays.filter((row) => row.attendanceDate <= todayKey()).map((row) => {
+                    const record = recordsByDate.get(row.attendanceDate);
                     return (
-                      <li className={`ta-row ${record.attendanceDate === todayKey() ? "is-today" : ""}`} key={record._id}>
+                      <li className={`ta-row ${row.attendanceDate === todayKey() ? "is-today" : ""}`} key={row.attendanceDate}>
                         <div className="ta-row-main">
                           <span className="ta-avatar date" aria-hidden="true"><CalendarDays size={16} /></span>
                           <div className="ta-row-text">
-                            <strong className="ta-row-title"><span className="ta-row-date">{formatDate(record.attendanceDate)}</span>{record.attendanceDate === todayKey() ? <span className="ta-today-tag">{t("teacherAttendance.todayTag")}</span> : null}</strong>
-                            <small>{t("teacherAttendance.checkIn")}: {formatTime(record.checkInAtServer)}</small>
+                            <strong className="ta-row-title"><span className="ta-row-date">{formatDate(row.attendanceDate)}</span>{row.attendanceDate === todayKey() ? <span className="ta-today-tag">{t("teacherAttendance.todayTag")}</span> : null}</strong>
+                            <small>{row.holidayName ?? (record ? recordDetail(record) : t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status }))}</small>
                           </div>
                         </div>
                         <div className="ta-row-side">
-                          <span className={`status-badge ${statusTone(record.status)}`}>{t(`teacherAttendance.status.${record.status}`, { defaultValue: record.status })}</span>
-                          {isPending ? <span className="ta-pending-label">{t("teacherAttendance.requestPending")}</span> : (
-                            <button type="button" className="ta-btn ghost small" onClick={() => openRequestModal("correction", record.attendanceDate, record._id)}>{t("teacherAttendance.applyCorrection")}</button>
-                          )}
+                          <span className={`status-badge ${statusTone(row.status)}`}>{t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}</span>
+                          {row.correctionPending ? <span className="ta-pending-label">{t("teacherAttendance.requestPending")}</span> : row.correctionAvailable ? (
+                            <button type="button" className="ta-btn ghost small" onClick={() => record ? openRequestModal("correction", row.attendanceDate, record._id) : openRequestModal("manual", row.attendanceDate)}>
+                              {record ? t("teacherAttendance.applyCorrection") : t("teacherAttendance.applyManual")}
+                            </button>
+                          ) : null}
                         </div>
                       </li>
                     );
@@ -1105,6 +1261,22 @@ export default function TeacherAttendancePage({
             <label className="ta-field">{t("teacherAttendance.windowEnd")}<input type="time" value={settings.markWindowEnd} onChange={(event) => setSettings({ ...settings, markWindowEnd: event.target.value })} /></label>
             <label className="ta-field">{t("teacherAttendance.threshold")}<input type="time" value={settings.inTimeThreshold} onChange={(event) => setSettings({ ...settings, inTimeThreshold: event.target.value })} /></label>
             <label className="ta-field">{t("teacherAttendance.radius")}<input type="number" min="1" inputMode="numeric" value={settings.geofenceRadiusMeters} onChange={(event) => setSettings({ ...settings, geofenceRadiusMeters: Number(event.target.value) })} /></label>
+            <label className="ta-field">{t("teacherAttendance.timezone")}<input type="text" value={settings.timezone} onChange={(event) => setSettings({ ...settings, timezone: event.target.value })} /></label>
+          </div>
+
+          <p className="ta-policy-hint">{t("teacherAttendance.finalizationHint", { time: settings.markWindowEnd })}</p>
+
+          <div className="ta-toggle-stack">
+            <label className="ta-switch">
+              <input type="checkbox" checked={settings.allowCorrectionToLeave} onChange={(event) => setSettings({ ...settings, allowCorrectionToLeave: event.target.checked })} />
+              <span className="ta-switch-track" aria-hidden="true"><span className="ta-switch-thumb" /></span>
+              <span className="ta-switch-text">{t("teacherAttendance.allowCorrectionToLeave")}</span>
+            </label>
+            <label className="ta-switch">
+              <input type="checkbox" checked={settings.requireConflictResolution} onChange={(event) => setSettings({ ...settings, requireConflictResolution: event.target.checked })} />
+              <span className="ta-switch-track" aria-hidden="true"><span className="ta-switch-thumb" /></span>
+              <span className="ta-switch-text">{t("teacherAttendance.requireConflictResolution")}</span>
+            </label>
           </div>
 
           <div className="ta-geo-box">
@@ -1148,6 +1320,33 @@ export default function TeacherAttendancePage({
             <div className="ta-card-actions">
               <button type="button" className="ta-btn primary" disabled={requestSaving || !requestReason.trim()} onClick={() => void submitRequestModal()}>
                 {requestSaving ? t("teacherAttendance.saving") : t("teacherAttendance.submitRequest")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {conflictModal ? (
+        <div className="ta-modal-overlay" role="dialog" aria-modal="true" onClick={() => setConflictModal(null)}>
+          <div className="ta-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="ta-modal-header">
+              <h3>{t("teacherAttendance.resolveConflictTitle")}</h3>
+              <button type="button" className="ta-btn ghost small" onClick={() => setConflictModal(null)}><X size={16} aria-hidden="true" /></button>
+            </div>
+            <p className="ta-modal-date">{conflictModal.teacherName} · {formatDate(conflictModal.date)}</p>
+            <p className="ta-policy-hint">{t("teacherAttendance.conflictExplain")}</p>
+            <label className="ta-field">{t("teacherAttendance.conflictDecision")}
+              <select value={conflictResolution} onChange={(event) => setConflictResolution(event.target.value as typeof conflictResolution)}>
+                <option value="keep_attendance">{t("teacherAttendance.keepAttendance")}</option>
+                <option value="apply_leave">{t("teacherAttendance.applyLeave")}</option>
+              </select>
+            </label>
+            <label className="ta-field">{t("teacherAttendance.requestReason")}
+              <textarea rows={3} value={conflictNote} onChange={(event) => setConflictNote(event.target.value)} />
+            </label>
+            <div className="ta-card-actions">
+              <button type="button" className="ta-btn primary" disabled={conflictSaving || !conflictNote.trim()} onClick={() => void submitConflictModal()}>
+                {conflictSaving ? t("teacherAttendance.saving") : t("teacherAttendance.resolveConflict")}
               </button>
             </div>
           </div>

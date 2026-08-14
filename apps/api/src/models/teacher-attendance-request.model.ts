@@ -16,6 +16,8 @@ const teacherAttendanceRequestSchema = new mongoose.Schema(
     attendanceDate: { type: String, required: true, index: true },
     requestType: { type: String, enum: ATTENDANCE_REQUEST_TYPES, required: true },
     requestedStatus: { type: String, enum: ["on_time", "late", "on_leave"], required: true },
+    // Snapshot of the day status when the teacher raised the request.
+    originalStatus: { type: String, trim: true },
     reason: { type: String, required: true, trim: true },
     existingRecordId: { type: mongoose.Schema.Types.ObjectId, ref: "TeacherAttendanceRecord" },
     status: { type: String, enum: ATTENDANCE_REQUEST_STATUSES, default: "pending", index: true },

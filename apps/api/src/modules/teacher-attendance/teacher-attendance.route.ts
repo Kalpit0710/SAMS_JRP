@@ -17,14 +17,22 @@ import {
   CorrectTeacherAttendanceSchema,
   CreateAttendanceRequestSchema,
   MarkTeacherAttendanceSchema,
+  ResolveAttendanceConflictSchema,
   ReviewAttendanceRequestSchema,
   TeacherAttendanceHistorySchema,
   TeacherAttendanceOverviewSchema,
+  TeacherAttendanceReportSchema,
   TeacherAttendanceSettingsSchema,
   timeToMinutes
 } from "./teacher-attendance.schema.js";
+import {
+  resolveDay,
+  schoolDateKey as dayKeyInZone,
+  schoolMinutes as minutesInZone
+} from "./attendance-day.js";
+import { buildDayRows, loadAttendanceContext, summariseRows } from "./attendance-status.service.js";
 
-const SCHOOL_TIMEZONE = "Asia/Kolkata";
+const DEFAULT_TIMEZONE = "Asia/Kolkata";
 const FAILURE_MESSAGES: Record<string, string> = {
   already_marked: "Teacher attendance is already marked for today",
   outside_window: "Attendance can only be marked during the configured window",
@@ -39,24 +47,12 @@ const FAILURE_MESSAGES: Record<string, string> = {
 export const teacherAttendanceRouter = Router();
 teacherAttendanceRouter.use(requireAuth);
 
-function schoolDateKey(now = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: SCHOOL_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit"
-  }).format(now);
+function schoolDateKey(timezone: string = DEFAULT_TIMEZONE, now = new Date()): string {
+  return dayKeyInZone(timezone, now);
 }
 
-function schoolMinutes(now = new Date()): number {
-  const parts = new Intl.DateTimeFormat("en-GB", {
-    timeZone: SCHOOL_TIMEZONE,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23"
-  }).formatToParts(now);
-  return Number(parts.find((part) => part.type === "hour")?.value ?? 0) * 60
-    + Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+function schoolMinutes(timezone: string = DEFAULT_TIMEZONE, now = new Date()): number {
+  return minutesInZone(timezone, now);
 }
 
 function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -127,7 +123,7 @@ teacherAttendanceRouter.post(
       return res.status(503).json({ code: "TEACHER_ATTENDANCE_DISABLED", message: "Teacher self-attendance is not enabled" });
     }
 
-    const attendanceDate = schoolDateKey();
+    const attendanceDate = schoolDateKey(settings.timezone);
     const location = parsed.data.location;
     const baseAttempt = {
       teacherId: teacher._id,
@@ -140,7 +136,7 @@ teacherAttendanceRouter.post(
 
     const approvedFullDayLeave = await LeaveRequestModel.exists({
       teacherId: teacher._id,
-      status: "approved",
+      status: { $in: ["approved", "partially_approved"] },
       activeDates: attendanceDate
     });
     if (approvedFullDayLeave) {
@@ -156,7 +152,7 @@ teacherAttendanceRouter.post(
 
     const start = timeToMinutes(settings.markWindowStart);
     const end = timeToMinutes(settings.markWindowEnd);
-    const nowMinutes = schoolMinutes();
+    const nowMinutes = schoolMinutes(settings.timezone);
     if (start === null || end === null || nowMinutes < start || nowMinutes > end) {
       await recordAttempt({ ...baseAttempt, result: "rejected", failureCode: "outside_window" });
       return errorResponse(res, "outside_window");
@@ -237,6 +233,36 @@ teacherAttendanceRouter.get(
 );
 
 teacherAttendanceRouter.get(
+  "/me/days",
+  requireRoles(["teacher"]),
+  asyncHandler(async (req, res) => {
+    const parsed = TeacherAttendanceHistorySchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid attendance history query" });
+    const teacher = await getTeacher(req.auth!.userId);
+    if (!teacher) return res.status(403).json({ message: "Teacher account is not active" });
+    const context = await loadAttendanceContext();
+    const from = parsed.data.from ?? `${context.today.slice(0, 7)}-01`;
+    const to = parsed.data.to ?? context.today;
+    const { rows } = await buildDayRows({
+      teachers: [{ _id: teacher._id, fullName: teacher.fullName, classId: teacher.classId }],
+      from,
+      to
+    });
+    const todayRow = rows.find((row) => row.attendanceDate === context.today) ?? null;
+    return res.json({
+      from,
+      to,
+      timezone: context.timezone,
+      windowStart: context.settings.markWindowStart,
+      finalizesAt: context.settings.markWindowEnd,
+      today: todayRow,
+      rows,
+      summary: summariseRows(rows)
+    });
+  })
+);
+
+teacherAttendanceRouter.get(
   "/settings",
   requireRoles(["admin", "teacher"]),
   asyncHandler(async (_req, res) => res.json(await getTeacherAttendanceSettings()))
@@ -250,8 +276,13 @@ teacherAttendanceRouter.patch(
     if (!parsed.success) return res.status(400).json({ message: "Invalid teacher attendance settings", errors: parsed.error.flatten() });
     const settings = await TeacherAttendanceSettingsModel.findOneAndUpdate(
       {},
-      { $set: { ...parsed.data, updatedBy: req.auth!.userId }, $currentDate: { updatedAt: true } },
-      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true }
+      {
+        $set: { ...parsed.data, updatedBy: req.auth!.userId },
+        // Retired by the "absent at end of day, corrections never expire" policy.
+        $unset: { correctionWindowHours: "", allowAdminBackdateCorrection: "" },
+        $currentDate: { updatedAt: true }
+      },
+      { upsert: true, returnDocument: "after", setDefaultsOnInsert: true, strict: false }
     );
     setAuditMeta(res, {
       action: "TEACHER_ATTENDANCE_SETTINGS_UPDATE",
@@ -268,36 +299,119 @@ teacherAttendanceRouter.get(
   asyncHandler(async (req, res) => {
     const parsed = TeacherAttendanceOverviewSchema.safeParse(req.query);
     if (!parsed.success) return res.status(400).json({ message: "Invalid teacher attendance overview query" });
-    const from = parsed.data.from ?? parsed.data.to ?? schoolDateKey();
-    const to = parsed.data.to ?? parsed.data.from ?? schoolDateKey();
+    const context = await loadAttendanceContext();
+    const from = parsed.data.from ?? parsed.data.to ?? context.today;
+    const to = parsed.data.to ?? parsed.data.from ?? context.today;
     const teacherFilter: Record<string, unknown> = { isActive: true };
     if (parsed.data.teacherId && mongoose.Types.ObjectId.isValid(parsed.data.teacherId)) teacherFilter._id = parsed.data.teacherId;
     if (parsed.data.classId && mongoose.Types.ObjectId.isValid(parsed.data.classId)) teacherFilter.classId = parsed.data.classId;
     const teachers = await TeacherModel.find(teacherFilter).select("fullName classId").populate("classId", "name").lean();
-    const [records, leaves, failures] = await Promise.all([
-      TeacherAttendanceRecordModel.find({ attendanceDate: { $gte: from, $lte: to }, teacherId: { $in: teachers.map((teacher) => teacher._id) } }).lean(),
-      LeaveRequestModel.find({ status: { $in: ["approved", "partially_approved"] }, teacherId: { $in: teachers.map((teacher) => teacher._id) }, activeDates: { $in: [from, to] } }).lean(),
-      TeacherAttendanceAttemptModel.aggregate([{ $match: { attendanceDate: { $gte: from, $lte: to }, result: "rejected" } }, { $group: { _id: "$failureCode", count: { $sum: 1 } } }])
+
+    const [{ rows }, failures] = await Promise.all([
+      buildDayRows({ teachers, from, to }),
+      TeacherAttendanceAttemptModel.aggregate([
+        { $match: { attendanceDate: { $gte: from, $lte: to }, result: "rejected" } },
+        { $group: { _id: "$failureCode", count: { $sum: 1 } } }
+      ])
     ]);
-    const recordMap = new Map(records.map((record) => [`${record.teacherId}:${record.attendanceDate}`, record]));
-    const leaveMap = new Set(leaves.flatMap((leave) => leave.activeDates.map((date) => `${leave.teacherId}:${date}`)));
-    const rows = [];
-    for (const teacher of teachers) {
-      const populatedClass = teacher.classId && typeof teacher.classId === "object" && "name" in teacher.classId
-        ? teacher.classId as unknown as { _id: mongoose.Types.ObjectId; name: string }
-        : undefined;
-      for (let cursor = new Date(`${from}T00:00:00Z`); cursor <= new Date(`${to}T00:00:00Z`); cursor.setUTCDate(cursor.getUTCDate() + 1)) {
-        const date = cursor.toISOString().slice(0, 10);
-        const record = recordMap.get(`${teacher._id}:${date}`);
-        const leave = leaveMap.has(`${teacher._id}:${date}`);
-        const status = record?.status ?? (leave ? "on_leave" : "missed");
-        if (!parsed.data.status || parsed.data.status === status) {
-          rows.push({ teacherId: teacher._id, teacherName: teacher.fullName, classId: populatedClass?._id ?? teacher.classId, className: populatedClass?.name ?? "", attendanceDate: date, status, record });
-        }
+
+    const visible = parsed.data.status ? rows.filter((row) => row.status === parsed.data.status) : rows;
+    return res.json({
+      from,
+      to,
+      timezone: context.timezone,
+      finalizesAt: context.settings.markWindowEnd,
+      summary: summariseRows(rows),
+      rows: visible,
+      failures
+    });
+  })
+);
+
+teacherAttendanceRouter.get(
+  "/admin/report",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const parsed = TeacherAttendanceReportSchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid attendance report query", errors: parsed.error.flatten() });
+    const teacherFilter: Record<string, unknown> = { isActive: true };
+    if (parsed.data.teacherId && mongoose.Types.ObjectId.isValid(parsed.data.teacherId)) teacherFilter._id = parsed.data.teacherId;
+    if (parsed.data.classId && mongoose.Types.ObjectId.isValid(parsed.data.classId)) teacherFilter.classId = parsed.data.classId;
+    const teachers = await TeacherModel.find(teacherFilter).select("fullName classId").populate("classId", "name").lean();
+    const { rows } = await buildDayRows({ teachers, from: parsed.data.from, to: parsed.data.to });
+
+    const byTeacher = new Map<string, {
+      teacherId: string; teacherName: string; className: string;
+      workingDays: number; present: number; late: number; absent: number; onLeave: number;
+      corrected: number; conflicts: number; pendingCorrections: number; notDue: number;
+    }>();
+
+    for (const row of rows) {
+      if (!byTeacher.has(row.teacherId)) {
+        byTeacher.set(row.teacherId, {
+          teacherId: row.teacherId, teacherName: row.teacherName, className: row.className,
+          workingDays: 0, present: 0, late: 0, absent: 0, onLeave: 0,
+          corrected: 0, conflicts: 0, pendingCorrections: 0, notDue: 0
+        });
       }
+      const entry = byTeacher.get(row.teacherId)!;
+      if (!row.isWorkingDay) continue;
+      if (row.status === "not_due" || row.status === "pending") { entry.notDue += 1; continue; }
+      entry.workingDays += 1;
+      if (row.wasCorrected) entry.corrected += 1;
+      if (row.hasConflict) entry.conflicts += 1;
+      if (row.correctionPending) entry.pendingCorrections += 1;
+      if (row.effectiveStatus === "present") entry.present += 1;
+      else if (row.effectiveStatus === "late") entry.late += 1;
+      else if (row.effectiveStatus === "on_leave") entry.onLeave += 1;
+      else if (row.effectiveStatus === "absent") entry.absent += 1;
     }
-    const counts = rows.reduce<Record<string, number>>((result, row) => ({ ...result, [row.status]: (result[row.status] ?? 0) + 1 }), {});
-    return res.json({ from, to, summary: counts, rows, failures });
+
+    const items = [...byTeacher.values()].map((entry) => ({
+      ...entry,
+      // Non-working days are excluded from the denominator.
+      attendanceRate: entry.workingDays === 0
+        ? null
+        : Math.round(((entry.present + entry.late) / entry.workingDays) * 1000) / 10
+    }));
+    return res.json({ from: parsed.data.from, to: parsed.data.to, items });
+  })
+);
+
+teacherAttendanceRouter.get(
+  "/admin/alerts",
+  requireRoles(["admin"]),
+  asyncHandler(async (_req, res) => {
+    const context = await loadAttendanceContext();
+    const teachers = await TeacherModel.find({ isActive: true }).select("fullName classId").populate("classId", "name").lean();
+    const monthStart = `${context.today.slice(0, 7)}-01`;
+    const [{ rows: todayRows }, { rows: monthRows }, pendingCorrections] = await Promise.all([
+      buildDayRows({ teachers, from: context.today, to: context.today }),
+      buildDayRows({ teachers, from: monthStart, to: context.today }),
+      TeacherAttendanceRequestModel.countDocuments({ status: "pending" })
+    ]);
+
+    const repeatAbsentees = [...monthRows
+      .filter((row) => row.effectiveStatus === "absent")
+      .reduce((counts, row) => counts.set(row.teacherId, {
+        teacherName: row.teacherName,
+        count: (counts.get(row.teacherId)?.count ?? 0) + 1
+      }), new Map<string, { teacherName: string; count: number }>())]
+      .map(([teacherId, value]) => ({ teacherId, ...value }))
+      .filter((entry) => entry.count >= 3)
+      .sort((a, b) => b.count - a.count);
+
+    return res.json({
+      date: context.today,
+      finalizesAt: context.settings.markWindowEnd,
+      isDayClosed: context.finalizeMinutes !== null && context.nowMinutes >= context.finalizeMinutes,
+      pendingAttendance: todayRows.filter((row) => row.status === "pending").length,
+      absentToday: todayRows.filter((row) => row.status === "absent").length,
+      onLeaveToday: todayRows.filter((row) => row.status === "on_leave").length,
+      conflicts: monthRows.filter((row) => row.hasConflict),
+      pendingCorrections,
+      repeatAbsentees
+    });
   })
 );
 
@@ -310,11 +424,11 @@ teacherAttendanceRouter.patch(
     const record = await TeacherAttendanceRecordModel.findById(req.params.recordId);
     if (!record) return res.status(404).json({ message: "Teacher attendance record not found" });
     const settings = await getTeacherAttendanceSettings();
-    const ageHours = (Date.now() - record.createdAt.getTime()) / 3_600_000;
-    if (!settings.allowAdminBackdateCorrection && ageHours > settings.correctionWindowHours) {
-      return res.status(409).json({ code: "TEACHER_ATTENDANCE_CORRECTION_WINDOW_EXPIRED", message: "Correction window has expired" });
+    if (parsed.data.correctedToStatus === "on_leave" && !settings.allowCorrectionToLeave) {
+      return res.status(409).json({ code: "TEACHER_ATTENDANCE_LEAVE_CORRECTION_DISABLED", message: "Correcting attendance to leave is disabled" });
     }
     const original = record.toObject();
+    if (!record.originalStatus) record.originalStatus = record.status;
     record.status = "corrected";
     record.correctedToStatus = parsed.data.correctedToStatus;
     record.correctionReason = parsed.data.correctionReason;
@@ -330,6 +444,36 @@ teacherAttendanceRouter.patch(
   })
 );
 
+teacherAttendanceRouter.patch(
+  "/admin/:recordId/resolve-conflict",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const parsed = ResolveAttendanceConflictSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid conflict resolution payload", errors: parsed.error.flatten() });
+    const record = await TeacherAttendanceRecordModel.findById(req.params.recordId);
+    if (!record) return res.status(404).json({ message: "Teacher attendance record not found" });
+    const onLeave = await LeaveRequestModel.exists({
+      teacherId: record.teacherId,
+      status: { $in: ["approved", "partially_approved"] },
+      activeDates: record.attendanceDate
+    });
+    if (!onLeave) return res.status(409).json({ message: "This date no longer has an approved leave conflict" });
+
+    record.conflictResolution = parsed.data.resolution;
+    record.conflictResolutionNote = parsed.data.note;
+    record.conflictResolvedBy = new mongoose.Types.ObjectId(req.auth!.userId);
+    record.conflictResolvedAt = new Date();
+    record.updatedBy = new mongoose.Types.ObjectId(req.auth!.userId);
+    await record.save();
+    setAuditMeta(res, {
+      action: "TEACHER_ATTENDANCE_CONFLICT_RESOLVE",
+      resource: "teacher-attendance/record",
+      metadata: { recordId: record.id, attendanceDate: record.attendanceDate, resolution: parsed.data.resolution }
+    });
+    return res.json({ item: record });
+  })
+);
+
 // Teacher-initiated correction / manual-attendance requests, subject to admin approval.
 teacherAttendanceRouter.post(
   "/requests",
@@ -339,8 +483,12 @@ teacherAttendanceRouter.post(
     if (!parsed.success) return res.status(400).json({ message: "Invalid attendance request", errors: parsed.error.flatten() });
     const teacher = await getTeacher(req.auth!.userId);
     if (!teacher) return res.status(403).json({ message: "Teacher account is not active" });
-    if (parsed.data.attendanceDate > schoolDateKey()) {
+    const context = await loadAttendanceContext();
+    if (parsed.data.attendanceDate > context.today) {
       return res.status(400).json({ message: "Attendance date cannot be in the future" });
+    }
+    if (parsed.data.requestedStatus === "on_leave" && !context.settings.allowCorrectionToLeave) {
+      return res.status(409).json({ code: "TEACHER_ATTENDANCE_LEAVE_CORRECTION_DISABLED", message: "Correcting attendance to leave is disabled" });
     }
 
     const existingRecord = await TeacherAttendanceRecordModel.findOne({ teacherId: teacher._id, attendanceDate: parsed.data.attendanceDate });
@@ -349,6 +497,34 @@ teacherAttendanceRouter.post(
     }
     if (parsed.data.requestType === "manual" && existingRecord) {
       return res.status(409).json({ message: "Attendance is already marked for this date" });
+    }
+
+    const onApprovedLeave = await LeaveRequestModel.exists({
+      teacherId: teacher._id,
+      status: { $in: ["approved", "partially_approved"] },
+      activeDates: parsed.data.attendanceDate
+    });
+    const day = resolveDay({
+      date: parsed.data.attendanceDate,
+      today: context.today,
+      nowMinutes: context.nowMinutes,
+      finalizeMinutes: context.finalizeMinutes,
+      calendar: context.calendar,
+      record: existingRecord
+        ? {
+            status: existingRecord.status,
+            correctedToStatus: existingRecord.correctedToStatus ?? null,
+            conflictResolution: existingRecord.conflictResolution ?? null,
+            originalStatus: existingRecord.originalStatus ?? null
+          }
+        : null,
+      onApprovedLeave: Boolean(onApprovedLeave)
+    });
+    if (!day.isWorkingDay) {
+      return res.status(409).json({ code: "TEACHER_ATTENDANCE_NON_WORKING_DAY", message: "This date is not a school working day" });
+    }
+    if (!day.isFinalized && !existingRecord) {
+      return res.status(409).json({ code: "TEACHER_ATTENDANCE_DAY_OPEN", message: "Attendance is still open for this date" });
     }
 
     await teacher.populate("classId", "name");
@@ -367,6 +543,7 @@ teacherAttendanceRouter.post(
         attendanceDate: parsed.data.attendanceDate,
         requestType: parsed.data.requestType,
         requestedStatus: parsed.data.requestedStatus,
+        originalStatus: day.status,
         reason: parsed.data.reason,
         existingRecordId: existingRecord?._id
       });
@@ -442,6 +619,7 @@ teacherAttendanceRouter.patch(
       if (request.requestType === "correction" && request.existingRecordId) {
         record = await TeacherAttendanceRecordModel.findById(request.existingRecordId);
         if (record) {
+          if (!record.originalStatus) record.originalStatus = record.status;
           record.status = "corrected";
           record.correctedToStatus = request.requestedStatus;
           record.correctionReason = request.reason;
@@ -456,6 +634,9 @@ teacherAttendanceRouter.patch(
             attendanceDate: request.attendanceDate,
             checkInAtServer: new Date(`${request.attendanceDate}T00:00:00`),
             status: request.requestedStatus,
+            // The day was an absence until this request was approved.
+            originalStatus: "absent",
+            correctionReason: request.reason,
             source: "manual_application",
             createdBy: request.teacherUserId,
             updatedBy: adminUserId

@@ -11,11 +11,22 @@ export type LeaveRequest = <T>(path: string, options: RequestInit) => Promise<T>
 type Role = "admin" | "teacher";
 type LeaveStatus = "pending" | "approved" | "partially_approved" | "rejected" | "withdrawn";
 
+type SubstituteInfo = {
+  substituteTeacherId: string;
+  substituteTeacherName: string;
+  className: string;
+  dates: string[];
+  fromDateLabel: string;
+  toDateLabel: string;
+  note?: string;
+};
+
 type LeaveItem = {
   _id: string;
   teacherId: string;
   teacherName: string;
   className: string;
+  classId?: string;
   fromDate: string;
   toDate: string;
   fromDateLabel: string;
@@ -27,6 +38,7 @@ type LeaveItem = {
   approvedFromDateLabel?: string;
   approvedToDateLabel?: string;
   decisionNote?: string;
+  substitute?: SubstituteInfo | null;
   createdAt: string;
   adminWhatsAppLink: string;
   teacherWhatsAppLink: string;
@@ -146,6 +158,8 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
   const [status, setStatus] = useState("");
   const [scope, setScope] = useState<"upcoming" | "past">("upcoming");
   const [teachers, setTeachers] = useState<TeacherOption[]>([]);
+  const [substituteTeacherId, setSubstituteTeacherId] = useState("");
+  const [substituteNote, setSubstituteNote] = useState("");
   const [applicationTeacherId, setApplicationTeacherId] = useState("");
   const [applicationFrom, setApplicationFrom] = useState("");
   const [applicationTo, setApplicationTo] = useState("");
@@ -296,6 +310,37 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
       setSelected(result.item); setRevokeNote(""); toast.success(t("leave.revoked")); await loadApplications();
     } catch (revokeError) {
       const message = revokeError instanceof Error ? revokeError.message : t("leave.actionFailed");
+      setError(message); toast.error(message);
+    } finally { setSaving(false); }
+  };
+
+  const canAssignSubstitute = (item: LeaveItem) =>
+    (item.status === "approved" || item.status === "partially_approved") && item.toDate >= todayDateKey();
+
+  const assignSubstitute = async (item: LeaveItem) => {
+    if (!substituteTeacherId) { setError(t("leave.substituteRequired")); return; }
+    setSaving(true); setError(null);
+    try {
+      const result = await requestWithAuth<{ item: LeaveItem }>(`/leaves/${item._id}/substitute`, {
+        method: "POST",
+        body: JSON.stringify({ substituteTeacherId, note: substituteNote.trim() || undefined })
+      });
+      setSelected(result.item); setSubstituteTeacherId(""); setSubstituteNote("");
+      toast.success(t("leave.substituteAssigned")); await loadApplications();
+    } catch (assignError) {
+      const message = assignError instanceof Error ? assignError.message : t("leave.actionFailed");
+      setError(message); toast.error(message);
+    } finally { setSaving(false); }
+  };
+
+  const removeSubstitute = async (item: LeaveItem) => {
+    setSaving(true); setError(null);
+    try {
+      const result = await requestWithAuth<{ item: LeaveItem }>(`/leaves/${item._id}/substitute`, { method: "DELETE" });
+      if (result.item) setSelected(result.item);
+      toast.success(t("leave.substituteRemoved")); await loadApplications();
+    } catch (removeError) {
+      const message = removeError instanceof Error ? removeError.message : t("leave.actionFailed");
       setError(message); toast.error(message);
     } finally { setSaving(false); }
   };
@@ -667,6 +712,60 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
                     <button className="primary-btn danger-text" disabled={saving || !revokeNote.trim()} type="submit">
                       <X size={15} />{saving ? t("leave.saving") : t("leave.rejectApproved")}
                     </button>
+                  </form>
+                </section>
+              ) : null}
+
+              {selected.substitute ? (
+                <section className="modal-details-section">
+                  <dl className="leave-detail-list">
+                    <div className="leave-detail-item">
+                      <dt>{t("leave.substitute")}</dt>
+                      <dd>
+                        {selected.substitute.substituteTeacherName}
+                        <small className="leave-cell-subtitle">
+                          {selected.substitute.className} · {selected.substitute.fromDateLabel} - {selected.substitute.toDateLabel} ({selected.substitute.dates.length})
+                        </small>
+                      </dd>
+                    </div>
+                    {selected.substitute.note ? (
+                      <div className="leave-detail-item">
+                        <dt>{t("leave.substituteNote")}</dt>
+                        <dd className="leave-detail-reason">{selected.substitute.note}</dd>
+                      </div>
+                    ) : null}
+                  </dl>
+                </section>
+              ) : null}
+
+              {role === "admin" && canAssignSubstitute(selected) ? (
+                <section className="modal-action-section leave-substitute-section">
+                  <h3 className="section-title">{t("leave.substituteTitle")}</h3>
+                  <p className="panel-subtitle">{t("leave.substituteHint")}</p>
+                  <form className="leave-decision-form" onSubmit={(event) => { event.preventDefault(); void assignSubstitute(selected); }}>
+                    <div className="form-field">
+                      <label htmlFor="substitute-teacher">{t("leave.substitute")}</label>
+                      <select id="substitute-teacher" value={substituteTeacherId} onChange={(event) => setSubstituteTeacherId(event.target.value)}>
+                        <option value="">{t("leave.substituteSelect")}</option>
+                        {teachers
+                          .filter((teacher) => teacher._id !== selected.teacherId)
+                          .map((teacher) => <option key={teacher._id} value={teacher._id}>{teacher.fullName}</option>)}
+                      </select>
+                    </div>
+                    <div className="form-field">
+                      <label htmlFor="substitute-note">{t("leave.adminNoteOptional")}</label>
+                      <textarea id="substitute-note" value={substituteNote} onChange={(event) => setSubstituteNote(event.target.value)} maxLength={1000} />
+                    </div>
+                    <div className="modal-footer-actions">
+                      <button className="primary-btn" disabled={saving || !substituteTeacherId} type="submit">
+                        {saving ? t("leave.saving") : t("leave.substituteAssign")}
+                      </button>
+                      {selected.substitute ? (
+                        <button type="button" className="ghost-btn danger-text" disabled={saving} onClick={() => void removeSubstitute(selected)}>
+                          {t("leave.substituteRemove")}
+                        </button>
+                      ) : null}
+                    </div>
                   </form>
                 </section>
               ) : null}
