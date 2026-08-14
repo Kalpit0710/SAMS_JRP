@@ -15,6 +15,7 @@ import {
   LeaveAnalyticsQuerySchema,
   LeaveDecisionSchema,
   LeaveListQuerySchema,
+  LeaveRevokeSchema,
   UpdateLeaveSettingsSchema
 } from "./leave.schema.js";
 import { buildAdminLeaveRequestMessage, buildTeacherLeaveDecisionMessage } from "./leave.templates.js";
@@ -294,7 +295,7 @@ leaveRouter.get(
     if (!parsed.success) {
       return res.status(400).json({ message: "Invalid leave list query", errors: parsed.error.flatten() });
     }
-    const { page, pageSize, status, teacherId, fromDate, toDate } = parsed.data;
+    const { page, pageSize, status, teacherId, fromDate, toDate, scope } = parsed.data;
     const filter: Record<string, unknown> = {};
     if (req.auth?.activeRole === "teacher") {
       filter.teacherUserId = new mongoose.Types.ObjectId(req.auth.userId);
@@ -305,8 +306,12 @@ leaveRouter.get(
       filter.teacherId = new mongoose.Types.ObjectId(teacherId);
     }
     if (status) filter.status = status;
-    if (fromDate) filter.toDate = { $gte: fromDate };
-    if (toDate) filter.fromDate = { $lte: toDate };
+    const conditions: Record<string, unknown>[] = [];
+    if (fromDate) conditions.push({ toDate: { $gte: fromDate } });
+    if (toDate) conditions.push({ fromDate: { $lte: toDate } });
+    if (scope === "upcoming") conditions.push({ toDate: { $gte: todayDateKey() } });
+    else if (scope === "past") conditions.push({ toDate: { $lt: todayDateKey() } });
+    if (conditions.length > 0) filter.$and = conditions;
 
     const [rows, total] = await Promise.all([
       LeaveRequestModel.find(filter).sort({ createdAt: -1 }).skip((page - 1) * pageSize).limit(pageSize).lean(),
@@ -337,16 +342,68 @@ leaveRouter.post(
   "/:id/withdraw",
   requireRoles(["teacher"]),
   asyncHandler(async (req, res) => {
-    const record = await LeaveRequestModel.findOneAndUpdate(
-      { _id: String(req.params.id), teacherUserId: req.auth!.userId, status: "pending" },
-      { $set: { status: "withdrawn", withdrawnBy: req.auth!.userId, withdrawnAt: new Date(), activeDates: [] } },
+    const existing = await LeaveRequestModel.findOne({
+      _id: String(req.params.id),
+      teacherUserId: req.auth!.userId,
+      status: { $in: ["pending", "approved", "partially_approved"] }
+    }).lean();
+    if (!existing) {
+      return res.status(409).json({ message: "Only your own pending or approved application can be cancelled" });
+    }
+    const record = asRecord(existing);
+    if (record.status !== "pending" && record.fromDate <= todayDateKey()) {
+      return res.status(409).json({ message: "Only leave that has not started yet can be cancelled" });
+    }
+    const record2 = await LeaveRequestModel.findOneAndUpdate(
+      { _id: record._id, status: record.status },
+      { $set: { status: "withdrawn", withdrawnBy: req.auth!.userId, withdrawnAt: new Date(), approvedWorkingDates: [], activeDates: [] } },
       { returnDocument: "after" }
     ).lean();
-    if (!record) {
-      return res.status(409).json({ message: "Only your own pending application can be withdrawn" });
+    if (!record2) {
+      return res.status(409).json({ message: "This application was already updated" });
     }
-    setAuditMeta(res, { action: "LEAVE_REQUEST_WITHDRAW", resource: "leave/request", metadata: { leaveId: String(req.params.id) } });
-    return res.status(200).json({ item: await serializeLeave(asRecord(record)) });
+    setAuditMeta(res, { action: "LEAVE_REQUEST_WITHDRAW", resource: "leave/request", metadata: { leaveId: String(req.params.id), previousStatus: record.status } });
+    return res.status(200).json({ item: await serializeLeave(asRecord(record2)) });
+  })
+);
+
+leaveRouter.post(
+  "/:id/revoke",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const parsed = LeaveRevokeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "A reason is required to reject an approved leave", errors: parsed.error.flatten() });
+    }
+    const existing = await LeaveRequestModel.findOne({
+      _id: String(req.params.id),
+      status: { $in: ["approved", "partially_approved"] }
+    }).lean();
+    if (!existing) {
+      return res.status(409).json({ message: "Only an approved or partially approved application can be rejected" });
+    }
+    if (existing.fromDate <= todayDateKey()) {
+      return res.status(409).json({ message: "Leave that has already started or passed cannot be rejected" });
+    }
+    const updated = await LeaveRequestModel.findOneAndUpdate(
+      { _id: String(req.params.id), status: existing.status },
+      {
+        $set: {
+          status: "rejected",
+          approvedWorkingDates: [],
+          activeDates: [],
+          decisionNote: parsed.data.note,
+          decidedBy: req.auth!.userId,
+          decidedAt: new Date()
+        }
+      },
+      { returnDocument: "after" }
+    ).lean();
+    if (!updated) {
+      return res.status(409).json({ message: "This application was already updated" });
+    }
+    setAuditMeta(res, { action: "LEAVE_REQUEST_REVOKE", resource: "leave/request", metadata: { leaveId: String(req.params.id), previousStatus: existing.status } });
+    return res.status(200).json({ item: await serializeLeave(asRecord(updated)) });
   })
 );
 

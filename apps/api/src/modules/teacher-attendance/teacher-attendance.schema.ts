@@ -54,6 +54,24 @@ export const CorrectTeacherAttendanceSchema = z.object({
   correctionReason: z.string().trim().min(3).max(1000)
 });
 
+export const CreateAttendanceRequestSchema = z.object({
+  attendanceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  requestType: z.enum(["correction", "manual"]),
+  requestedStatus: z.enum(["on_time", "late", "on_leave"]),
+  reason: z.string().trim().min(3).max(1000)
+});
+
+export const AttendanceRequestListQuerySchema = z.object({
+  status: z.enum(["pending", "approved", "rejected"]).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(30)
+});
+
+export const ReviewAttendanceRequestSchema = z.object({
+  decision: z.enum(["approved", "rejected"]),
+  decisionNote: z.string().trim().max(1000).optional()
+});
+
 export function timeToMinutes(value: string): number | null {
   const match = /^(\d{2}):(\d{2})$/.exec(value);
   if (!match) return null;

@@ -1048,6 +1048,28 @@ input:focus {
   min-width: 150px;
 }
 
+.leave-applications-header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1rem;
+}
+
+.leave-scope-toggle {
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.leave-filter-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+}
+
+.leave-revoke-hint {
+  margin: 0.75rem 0 0;
+  font-style: italic;
+}
+
 .leave-cell-subtitle {
   display: block;
   margin-top: 0.2rem;
@@ -1103,6 +1125,185 @@ input:focus {
   .leave-detail-list > div { grid-template-columns: 1fr; gap: 0.35rem; }
   .leave-detail-modal .modal-footer { flex-direction: column; }
   .leave-detail-modal .modal-footer button { width: 100%; justify-content: center; }
+}
+
+/* Leave Portal Enhancements */
+.leave-applications-panel,
+.leave-analytics-filters-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.leave-header-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.leave-filters-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.5rem 1.25rem;
+  margin-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border-light);
+  align-items: stretch;
+}
+
+.leave-list-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  align-items: flex-end;
+}
+
+.leave-filter-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.5rem;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.leave-filter-actions .primary-btn,
+.leave-filter-actions .ghost-btn {
+  white-space: nowrap;
+}
+
+/* Modal Body Sections */
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  margin: 0.75rem 0;
+}
+
+.modal-details-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.leave-detail-item {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.35fr) 1fr;
+  gap: 1rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.leave-detail-item:last-child {
+  border-bottom: none;
+}
+
+.leave-detail-reason {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.modal-action-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.9rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-light);
+  border-radius: 0.65rem;
+}
+
+.modal-message-section {
+  padding: 1rem;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid var(--warning);
+  border-radius: 0.65rem;
+}
+
+.section-title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.leave-decision-section .decision-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.leave-date-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.modal-footer-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.modal-title-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.leave-analytics-table {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 1024px) {
+  .leave-list-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .leave-filter-actions {
+    align-items: center;
+  }
+
+  .leave-filter-actions .primary-btn,
+  .leave-filter-actions .ghost-btn {
+    width: auto;
+  }
+
+  .leave-date-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .leave-detail-item {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .modal-footer-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .modal-footer-actions button {
+    width: 100%;
+    justify-content: center;
+  }
+}
+
+@media (max-width: 640px) {
+  .leave-list-filters {
+    grid-template-columns: 1fr;
+  }
+
+  .leave-filter-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .leave-filter-actions .primary-btn,
+  .leave-filter-actions .ghost-btn {
+    width: 100%;
+  }
 }
 
 /* Custom Scrollbar */
@@ -2228,6 +2429,252 @@ input:focus {
   color: var(--text-muted);
   font-size: 0.82rem;
   text-align: center;
+}
+
+/* Teacher attendance revamp: tabs, filters, calendar/tile views, request modal */
+.ta-tabs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--border-light);
+  padding-bottom: 0.25rem;
+}
+
+.ta-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.55rem 0.9rem;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.ta-tab:hover { color: var(--text-primary); background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
+
+.ta-tab.active {
+  color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+  box-shadow: inset 0 -2px 0 var(--accent-primary);
+}
+
+.ta-manual-apply {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 1rem;
+  padding: 0.75rem 0.9rem;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+}
+
+.ta-filter-bar {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.ta-view-switch {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.ta-month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0 1rem;
+  font-size: 0.9rem;
+}
+
+.ta-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 0.35rem;
+}
+
+.ta-calendar-weekday {
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  padding-bottom: 0.25rem;
+}
+
+.ta-calendar-cell {
+  position: relative;
+  aspect-ratio: 1;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+  background: var(--bg-input);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.ta-calendar-cell.empty { border: none; background: transparent; cursor: default; }
+.ta-calendar-cell:disabled { cursor: not-allowed; opacity: 0.45; }
+.ta-calendar-cell.is-today { box-shadow: 0 0 0 2px var(--accent-primary); }
+.ta-calendar-cell.present { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+.ta-calendar-cell.late { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+.ta-calendar-cell.absent { background: rgba(239, 68, 68, 0.15); color: var(--danger); }
+.ta-calendar-cell.half_day { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+
+.ta-calendar-pending-dot {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warning);
+}
+
+.ta-tile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+
+.ta-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+.ta-pending-label {
+  font-size: 0.72rem;
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.ta-summary-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  text-align: center;
+  padding: 1rem 0 1.5rem;
+}
+
+.ta-summary-fraction {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.15rem;
+}
+
+.ta-summary-fraction strong {
+  font-size: 1.05rem;
+}
+
+.ta-summary-fraction.large strong {
+  font-size: 2.2rem;
+}
+
+.ta-summary-fraction small {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.ta-summary-percent {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--accent-primary);
+}
+
+.ta-row-grouped {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.6rem;
+}
+
+.ta-tile-day {
+  grid-column: span 2;
+}
+
+.ta-day-teacher-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.ta-teacher-chip {
+  border: 1px solid var(--border-light);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  font-size: 0.75rem;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.ta-teacher-chip.present { background: rgba(16, 185, 129, 0.15); color: var(--success); border-color: transparent; }
+.ta-teacher-chip.late { background: rgba(245, 158, 11, 0.15); color: var(--warning); border-color: transparent; }
+.ta-teacher-chip.absent { background: rgba(239, 68, 68, 0.15); color: var(--danger); border-color: transparent; }
+.ta-teacher-chip.half_day { background: rgba(59, 130, 246, 0.15); color: #3b82f6; border-color: transparent; }
+
+.ta-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.ta-modal {
+  background: var(--bg-panel);
+  border-radius: 12px;
+  padding: 1.25rem;
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-shadow: 0 20px 45px rgba(0, 0, 0, 0.25);
+}
+
+.ta-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ta-modal-header h3 { margin: 0; font-size: 1.05rem; }
+
+.ta-modal-date {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.ta-modal textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
 }
 
 /* Animations */

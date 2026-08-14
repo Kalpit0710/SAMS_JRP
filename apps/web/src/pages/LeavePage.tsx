@@ -144,6 +144,7 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [status, setStatus] = useState("");
+  const [scope, setScope] = useState<"upcoming" | "past">("upcoming");
   const [teachers, setTeachers] = useState<TeacherOption[]>([]);
   const [applicationTeacherId, setApplicationTeacherId] = useState("");
   const [applicationFrom, setApplicationFrom] = useState("");
@@ -160,6 +161,7 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
   const [approvedFromDate, setApprovedFromDate] = useState("");
   const [approvedToDate, setApprovedToDate] = useState("");
   const [decisionNote, setDecisionNote] = useState("");
+  const [revokeNote, setRevokeNote] = useState("");
   const monthRange = currentMonthRange();
   const [analyticsFrom, setAnalyticsFrom] = useState(monthRange.fromDate);
   const [analyticsTo, setAnalyticsTo] = useState(monthRange.toDate);
@@ -172,7 +174,7 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
     setLoading(true);
     setError(null);
     try {
-      const query = new URLSearchParams({ page: String(page), pageSize: "20" });
+      const query = new URLSearchParams({ page: String(page), pageSize: "20", scope });
       if (status) query.set("status", status);
       if (applicationFilters.teacherId) query.set("teacherId", applicationFilters.teacherId);
       if (applicationFilters.fromDate) query.set("fromDate", applicationFilters.fromDate);
@@ -185,7 +187,7 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
     } finally {
       setLoading(false);
     }
-  }, [applicationFilters, page, requestWithAuth, status, t]);
+  }, [applicationFilters, page, requestWithAuth, scope, status, t]);
 
   const loadAnalytics = useCallback(async () => {
     const fromKey = displayDateToKey(analyticsFrom);
@@ -237,6 +239,7 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
 
   const closeDetails = () => {
     setSelected(null);
+    setRevokeNote("");
     if (searchParams.has("request")) {
       const next = new URLSearchParams(searchParams);
       next.delete("request");
@@ -279,6 +282,24 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
     } finally { setSaving(false); }
   };
 
+  const canCancel = (item: LeaveItem) =>
+    item.status === "pending" || ((item.status === "approved" || item.status === "partially_approved") && item.fromDate > todayDateKey());
+
+  const canRevoke = (item: LeaveItem) =>
+    (item.status === "approved" || item.status === "partially_approved") && item.fromDate > todayDateKey();
+
+  const revokeApproval = async (item: LeaveItem) => {
+    if (!revokeNote.trim()) { setError(t("leave.revokeNoteRequired")); return; }
+    setSaving(true); setError(null);
+    try {
+      const result = await requestWithAuth<{ item: LeaveItem }>(`/leaves/${item._id}/revoke`, { method: "POST", body: JSON.stringify({ note: revokeNote.trim() }) });
+      setSelected(result.item); setRevokeNote(""); toast.success(t("leave.revoked")); await loadApplications();
+    } catch (revokeError) {
+      const message = revokeError instanceof Error ? revokeError.message : t("leave.actionFailed");
+      setError(message); toast.error(message);
+    } finally { setSaving(false); }
+  };
+
   const decide = async (event: FormEvent) => {
     event.preventDefault();
     if (!selected) return;
@@ -301,7 +322,7 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
   };
 
   const showDetails = (item: LeaveItem) => {
-    setSelected(item); setApprovedFromDate(dateKeyToDisplay(item.fromDate)); setApprovedToDate(dateKeyToDisplay(item.toDate));
+    setSelected(item); setApprovedFromDate(dateKeyToDisplay(item.fromDate)); setApprovedToDate(dateKeyToDisplay(item.toDate)); setRevokeNote("");
   };
 
   const applyApplicationFilters = () => {
@@ -318,45 +339,365 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
 
   return (
     <div className="page-content fade-in leave-page">
-      <div className="page-title-wrap"><h2>{t("leave.title")}</h2><span className="active-crumb">{t(role === "admin" ? "leave.adminCrumb" : "leave.teacherCrumb")}</span></div>
+      <div className="page-title-wrap">
+        <h2>{t("leave.title")}</h2>
+        <span className="active-crumb">{t(role === "admin" ? "leave.adminCrumb" : "leave.teacherCrumb")}</span>
+      </div>
 
-      {role === "admin" ? <div className="manage-tabs">
-        <button className={`tab-btn ${tab === "applications" ? "active" : ""}`} onClick={() => setTab("applications")}><CalendarDays size={16} />{t("leave.applications")}</button>
-        <button className={`tab-btn ${tab === "analytics" ? "active" : ""}`} onClick={() => setTab("analytics")}><BarChart3 size={16} />{t("leave.analytics")}</button>
-      </div> : null}
+      {role === "admin" ? (
+        <div className="manage-tabs">
+          <button className={`tab-btn ${tab === "applications" ? "active" : ""}`} onClick={() => setTab("applications")}>
+            <CalendarDays size={16} />{t("leave.applications")}
+          </button>
+          <button className={`tab-btn ${tab === "analytics" ? "active" : ""}`} onClick={() => setTab("analytics")}>
+            <BarChart3 size={16} />{t("leave.analytics")}
+          </button>
+        </div>
+      ) : null}
 
-      {role === "teacher" ? <section className="table-panel leave-application-panel">
-        <div className="table-header"><div><h2 className="panel-title"><Plus size={16} />{t("leave.apply")}</h2><p className="panel-subtitle">{t("leave.applyHint")}</p></div></div>
-        <form className="leave-application-form" onSubmit={submitApplication}>
-          <DateField id="leave-from" label={t("leave.from")} value={fromDate} onChange={setFromDate} minDate={todayDateKey()} required />
-          <DateField id="leave-to" label={t("leave.to")} value={toDate} onChange={setToDate} minDate={displayDateToKey(fromDate) ?? todayDateKey()} required />
-          <div className="form-field leave-reason"><label htmlFor="leave-reason">{t("leave.reason")}<span className="req">*</span></label><textarea id="leave-reason" value={reason} onChange={(event) => setReason(event.target.value)} minLength={3} maxLength={1000} required /></div>
-          <button className="primary-btn" disabled={saving} type="submit"><Send size={16} />{saving ? t("leave.saving") : t("leave.submit")}</button>
-        </form>
-      </section> : null}
+      {role === "teacher" ? (
+        <section className="table-panel leave-application-panel">
+          <div className="table-header">
+            <div>
+              <h2 className="panel-title"><Plus size={16} />{t("leave.apply")}</h2>
+              <p className="panel-subtitle">{t("leave.applyHint")}</p>
+            </div>
+          </div>
+          <form className="leave-application-form" onSubmit={submitApplication}>
+            <DateField id="leave-from" label={t("leave.from")} value={fromDate} onChange={setFromDate} minDate={todayDateKey()} required />
+            <DateField id="leave-to" label={t("leave.to")} value={toDate} onChange={setToDate} minDate={displayDateToKey(fromDate) ?? todayDateKey()} required />
+            <div className="form-field leave-reason">
+              <label htmlFor="leave-reason">{t("leave.reason")}<span className="req">*</span></label>
+              <textarea id="leave-reason" value={reason} onChange={(event) => setReason(event.target.value)} minLength={3} maxLength={1000} required />
+            </div>
+            <button className="primary-btn" disabled={saving} type="submit">
+              <Send size={16} />{saving ? t("leave.saving") : t("leave.submit")}
+            </button>
+          </form>
+        </section>
+      ) : null}
 
       {error ? <p className="error-text">{error}</p> : null}
 
-      {tab === "applications" ? <section className="table-panel">
-        <div className="table-header"><div><h2 className="panel-title">{t("leave.applications")}</h2><p className="panel-subtitle">{t("leave.listHint")}</p></div><div className="table-controls leave-list-filters">{role === "admin" ? <><select aria-label={t("leave.teacher")} value={applicationTeacherId} onChange={(event) => setApplicationTeacherId(event.target.value)}><option value="">{t("leave.allTeachers")}</option>{teachers.map((teacher) => <option key={teacher._id} value={teacher._id}>{teacher.fullName}</option>)}</select><DateField id="application-filter-from" label={t("leave.from")} value={applicationFrom} onChange={setApplicationFrom} /><DateField id="application-filter-to" label={t("leave.to")} value={applicationTo} onChange={setApplicationTo} /></> : null}<select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}><option value="">{t("leave.allStatuses")}</option>{(["pending", "approved", "partially_approved", "rejected", "withdrawn"] as LeaveStatus[]).map((value) => <option key={value} value={value}>{t(`leave.status.${value}`)}</option>)}</select>{role === "admin" ? <button className="ghost-btn" onClick={applyApplicationFilters}>{t("leave.applyFilters")}</button> : null}<button className="icon-btn" onClick={() => void loadApplications()} title={t("leave.refresh")}><RefreshCw size={16} /></button></div></div>
-        {loading ? <PageLoader label={t("leave.loading")} /> : <div className="table-scroll"><table className="data-table"><thead><tr>{role === "admin" ? <th>{t("leave.teacher")}</th> : null}<th>{t("leave.dates")}</th><th>{t("leave.days")}</th><th>{t("leave.reason")}</th><th>{t("leave.statusLabel")}</th><th>{t("leave.actions")}</th></tr></thead><tbody>{items.map((item) => <tr key={item._id}>{role === "admin" ? <td><strong>{item.teacherName}</strong><small className="leave-cell-subtitle">{item.className || "-"}</small></td> : null}<td>{item.fromDateLabel}<br />{item.toDateLabel}</td><td>{item.status === "approved" || item.status === "partially_approved" ? item.approvedWorkingDays : item.requestedWorkingDays}</td><td className="leave-reason-cell">{item.reason}</td><td><span className={`status-badge leave-${item.status}`}>{t(`leave.status.${item.status}`)}</span></td><td><div className="row-actions leave-row-actions"><button type="button" className="icon-btn" onClick={() => showDetails(item)} title={t("leave.view")} aria-label={t("leave.view")}><Eye size={16} /></button>{role === "teacher" && item.status === "pending" ? <WhatsAppButton compact link={item.adminWhatsAppLink} label={item.hasAdminWhatsAppNumber ? t("leave.whatsappAdmin") : t("leave.shareWhatsApp")} /> : null}{role === "admin" && item.teacherWhatsAppLink ? <WhatsAppButton compact link={item.teacherWhatsAppLink} label={item.hasTeacherWhatsAppNumber ? t("leave.whatsappTeacher") : t("leave.shareWhatsApp")} /> : null}</div></td></tr>)}{items.length === 0 ? <tr><td colSpan={role === "admin" ? 6 : 5} className="empty-state">{t("leave.empty")}</td></tr> : null}</tbody></table></div>}
-        <div className="pagination-bar"><button className="ghost-btn" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t("common.previous")}</button><span>{t("leave.pageOf", { page, totalPages })}</span><button className="ghost-btn" disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}>{t("common.next")}</button></div>
-      </section> : null}
+      {tab === "applications" ? (
+        <section className="table-panel leave-applications-panel">
+          <div className="table-header">
+            <div className="leave-header-title">
+              <h2 className="panel-title">{t("leave.applications")}</h2>
+              <p className="panel-subtitle">{t("leave.listHint")}</p>
+            </div>
+            <div className="manage-tabs leave-scope-toggle">
+              {(["upcoming", "past"] as const).map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`tab-btn ${scope === value ? "active" : ""}`}
+                  onClick={() => { setScope(value); setPage(1); }}
+                >
+                  {t(`leave.scope.${value}`)}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      {role === "admin" && tab === "analytics" ? <div className="leave-analytics-stack">
-        <section className="table-panel"><div className="table-header"><div><h2 className="panel-title">{t("leave.analyticsFilters")}</h2></div><div className="table-controls"><select aria-label={t("leave.teacher")} value={analyticsTeacherId} onChange={(event) => setAnalyticsTeacherId(event.target.value)}><option value="">{t("leave.allTeachers")}</option>{teachers.map((teacher) => <option key={teacher._id} value={teacher._id}>{teacher.fullName}</option>)}</select><DateField id="analytics-from" label={t("leave.from")} value={analyticsFrom} onChange={setAnalyticsFrom} /><DateField id="analytics-to" label={t("leave.to")} value={analyticsTo} onChange={setAnalyticsTo} /><select value={granularity} onChange={(event) => setGranularity(event.target.value as "day" | "month")}><option value="day">{t("leave.daily")}</option><option value="month">{t("leave.monthly")}</option></select><button className="primary-btn" onClick={() => void loadAnalytics()}>{t("leave.applyFilters")}</button></div></div></section>
-        {analyticsLoading ? <PageLoader label={t("leave.loadingAnalytics")} /> : <><div className="stat-grid leave-stat-grid">{[
-          [t("leave.approvedDays"), analytics.summary.approvedLeaveDays, <CalendarDays key="approved-days" size={18} />],
-          [t("leave.teachersOnLeave"), analytics.summary.distinctTeachers, <UserRoundCheck key="teachers-on-leave" size={18} />],
-          [t("leave.pending"), analytics.summary.pending, <Clock3 key="pending-applications" size={18} />]
-        ].map(([label, value, icon]) => <article className="stat-card" key={String(label)}><div className="stat-header"><span className="stat-title">{label}</span><span className="stat-icon">{icon}</span></div><strong className="stat-value">{value}</strong></article>)}</div>
-        <div className="charts-grid"><section className="chart-panel"><div className="panel-header"><h3>{t("leave.trend")}</h3></div><ResponsiveContainer width="100%" height={260}><BarChart data={analytics.trend}><CartesianGrid strokeDasharray="3 3" stroke="var(--border)" /><XAxis dataKey="period" tickFormatter={(value) => granularity === "day" ? dateKeyToDisplay(value) : value} /><YAxis allowDecimals={false} /><Tooltip labelFormatter={(value) => granularity === "day" ? dateKeyToDisplay(String(value)) : value} /><Bar dataKey="leaveDays" fill="var(--accent-primary)" radius={[4, 4, 0, 0]} /></BarChart></ResponsiveContainer></section><section className="table-panel"><div className="table-header"><h2 className="panel-title">{t("leave.byTeacher")}</h2></div><div className="table-scroll"><table className="data-table"><thead><tr><th>{t("leave.teacher")}</th><th>{t("leave.days")}</th><th>{t("leave.requests")}</th></tr></thead><tbody>{analytics.teachers.map((teacher) => <tr key={teacher.teacherId}><td>{teacher.teacherName}<small className="leave-cell-subtitle">{teacher.className || "-"}</small></td><td>{teacher.approvedDays}</td><td>{teacher.decidedRequests}</td></tr>)}</tbody></table></div></section></div></>}
-      </div> : null}
+          <div className="leave-filters-wrapper">
+            <div className="table-controls leave-list-filters">
+              {role === "admin" ? (
+                <>
+                  <label className="master-data-control">
+                    <span>{t("leave.teacher")}</span>
+                    <select aria-label={t("leave.teacher")} value={applicationTeacherId} onChange={(event) => setApplicationTeacherId(event.target.value)}>
+                      <option value="">{t("leave.allTeachers")}</option>
+                      {teachers.map((teacher) => <option key={teacher._id} value={teacher._id}>{teacher.fullName}</option>)}
+                    </select>
+                  </label>
+                  <DateField id="application-filter-from" label={t("leave.from")} value={applicationFrom} onChange={setApplicationFrom} />
+                  <DateField id="application-filter-to" label={t("leave.to")} value={applicationTo} onChange={setApplicationTo} />
+                </>
+              ) : null}
+              <label className="master-data-control">
+                <span>{t("leave.statusLabel")}</span>
+                <select value={status} onChange={(event) => { setStatus(event.target.value); setPage(1); }}>
+                  <option value="">{t("leave.allStatuses")}</option>
+                  {(["pending", "approved", "partially_approved", "rejected", "withdrawn"] as LeaveStatus[]).map((value) => (
+                    <option key={value} value={value}>{t(`leave.status.${value}`)}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="leave-filter-actions">
+              {role === "admin" ? <button className="ghost-btn" onClick={applyApplicationFilters}>{t("leave.applyFilters")}</button> : null}
+              <button className="icon-btn" onClick={() => void loadApplications()} title={t("leave.refresh")} aria-label={t("leave.refresh")}>
+                <RefreshCw size={16} />
+              </button>
+            </div>
+          </div>
 
-      {selected ? <div className="modal-backdrop" onClick={closeDetails}><div className="modal-card leave-detail-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}><div className="modal-header"><div><h2>{selected.teacherName}</h2><p className="panel-subtitle">{selected.fromDateLabel} - {selected.toDateLabel}</p></div><button className="icon-btn" onClick={closeDetails} aria-label={t("common.close")}><X size={16} /></button></div><dl className="leave-detail-list"><div><dt>{t("leave.statusLabel")}</dt><dd><span className={`status-badge leave-${selected.status}`}>{t(`leave.status.${selected.status}`)}</span></dd></div><div><dt>{t("leave.reason")}</dt><dd>{selected.reason}</dd></div><div><dt>{t("leave.requestedDays")}</dt><dd>{selected.requestedWorkingDays}</dd></div>{selected.approvedWorkingDays ? <div><dt>{t("leave.approvedRange")}</dt><dd>{selected.approvedFromDateLabel} - {selected.approvedToDateLabel} ({selected.approvedWorkingDays})</dd></div> : null}{selected.decisionNote ? <div><dt>{t("leave.adminNote")}</dt><dd>{selected.decisionNote}</dd></div> : null}</dl>
-        {role === "admin" && selected.status === "pending" ? <form className="leave-decision-form" onSubmit={decide}><div className="manage-tabs">{(["approve", "partially_approve", "reject"] as const).map((value) => <button key={value} type="button" className={`tab-btn ${decision === value ? "active" : ""}`} onClick={() => setDecision(value)}>{value === "reject" ? <X size={15} /> : <Check size={15} />}{t(`leave.decision.${value}`)}</button>)}</div>{decision === "partially_approve" ? <div className="form-grid"><DateField id="approved-from" label={t("leave.approvedFrom")} value={approvedFromDate} onChange={setApprovedFromDate} minDate={selected.fromDate} maxDate={selected.toDate} required /><DateField id="approved-to" label={t("leave.approvedTo")} value={approvedToDate} onChange={setApprovedToDate} minDate={selected.fromDate} maxDate={selected.toDate} required /></div> : null}<div className="form-field"><label htmlFor="decision-note">{t("leave.adminNoteOptional")}</label><textarea id="decision-note" value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} maxLength={1000} /></div><button className="primary-btn" disabled={saving} type="submit">{saving ? t("leave.saving") : t("leave.saveDecision")}</button></form> : null}
-        {(role === "teacher" && selected.status === "pending") || (role === "admin" && selected.teacherWhatsAppLink) ? <div className="modal-footer">{role === "teacher" && selected.status === "pending" ? <button type="button" className="ghost-btn danger-text" disabled={saving} onClick={() => void withdraw(selected)}>{t("leave.withdraw")}</button> : null}{role === "teacher" && selected.status === "pending" ? <WhatsAppButton link={selected.adminWhatsAppLink} label={selected.hasAdminWhatsAppNumber ? t("leave.messageAdmin") : t("leave.shareWhatsApp")} /> : null}{role === "admin" && selected.teacherWhatsAppLink ? <WhatsAppButton link={selected.teacherWhatsAppLink} label={selected.hasTeacherWhatsAppNumber ? t("leave.notifyTeacher") : t("leave.shareWhatsApp")} /> : null}</div> : null}
-      </div></div> : null}
+          {loading ? (
+            <PageLoader label={t("leave.loading")} />
+          ) : (
+            <div className="table-scroll">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    {role === "admin" ? <th>{t("leave.teacher")}</th> : null}
+                    <th>{t("leave.dates")}</th>
+                    <th>{t("leave.days")}</th>
+                    <th>{t("leave.reason")}</th>
+                    <th>{t("leave.statusLabel")}</th>
+                    <th>{t("leave.actions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((item) => (
+                    <tr key={item._id}>
+                      {role === "admin" ? (
+                        <td>
+                          <strong>{item.teacherName}</strong>
+                          <small className="leave-cell-subtitle">{item.className || "-"}</small>
+                        </td>
+                      ) : null}
+                      <td>{item.fromDateLabel}<br />{item.toDateLabel}</td>
+                      <td>{item.status === "approved" || item.status === "partially_approved" ? item.approvedWorkingDays : item.requestedWorkingDays}</td>
+                      <td className="leave-reason-cell">{item.reason}</td>
+                      <td><span className={`status-badge leave-${item.status}`}>{t(`leave.status.${item.status}`)}</span></td>
+                      <td>
+                        <div className="row-actions leave-row-actions">
+                          <button type="button" className="icon-btn" onClick={() => showDetails(item)} title={t("leave.view")} aria-label={t("leave.view")}>
+                            <Eye size={16} />
+                          </button>
+                          {role === "teacher" && item.status === "pending" ? (
+                            <WhatsAppButton compact link={item.adminWhatsAppLink} label={item.hasAdminWhatsAppNumber ? t("leave.whatsappAdmin") : t("leave.shareWhatsApp")} />
+                          ) : null}
+                          {role === "admin" && item.teacherWhatsAppLink ? (
+                            <WhatsAppButton compact link={item.teacherWhatsAppLink} label={item.hasTeacherWhatsAppNumber ? t("leave.whatsappTeacher") : t("leave.shareWhatsApp")} />
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {items.length === 0 ? (
+                    <tr><td colSpan={role === "admin" ? 6 : 5} className="empty-state">{t("leave.empty")}</td></tr>
+                  ) : null}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="pagination-bar">
+            <button className="ghost-btn" disabled={page <= 1} onClick={() => setPage((value) => value - 1)}>{t("common.previous")}</button>
+            <span>{t("leave.pageOf", { page, totalPages })}</span>
+            <button className="ghost-btn" disabled={page >= totalPages} onClick={() => setPage((value) => value + 1)}>{t("common.next")}</button>
+          </div>
+        </section>
+      ) : null}
+
+      {role === "admin" && tab === "analytics" ? (
+        <div className="leave-analytics-stack">
+          <section className="table-panel leave-analytics-filters-panel">
+            <div className="table-header">
+              <h2 className="panel-title">{t("leave.analyticsFilters")}</h2>
+            </div>
+            <div className="leave-filters-wrapper">
+              <div className="table-controls leave-list-filters">
+                <label className="master-data-control">
+                  <span>{t("leave.teacher")}</span>
+                  <select aria-label={t("leave.teacher")} value={analyticsTeacherId} onChange={(event) => setAnalyticsTeacherId(event.target.value)}>
+                    <option value="">{t("leave.allTeachers")}</option>
+                    {teachers.map((teacher) => <option key={teacher._id} value={teacher._id}>{teacher.fullName}</option>)}
+                  </select>
+                </label>
+                <DateField id="analytics-from" label={t("leave.from")} value={analyticsFrom} onChange={setAnalyticsFrom} />
+                <DateField id="analytics-to" label={t("leave.to")} value={analyticsTo} onChange={setAnalyticsTo} />
+                <label className="master-data-control">
+                  <span>{t("leave.granularity")}</span>
+                  <select value={granularity} onChange={(event) => setGranularity(event.target.value as "day" | "month")}>
+                    <option value="day">{t("leave.daily")}</option>
+                    <option value="month">{t("leave.monthly")}</option>
+                  </select>
+                </label>
+              </div>
+              <div className="leave-filter-actions">
+                <button className="primary-btn" onClick={() => void loadAnalytics()}>{t("leave.applyFilters")}</button>
+              </div>
+            </div>
+          </section>
+
+          {analyticsLoading ? (
+            <PageLoader label={t("leave.loadingAnalytics")} />
+          ) : (
+            <>
+              <div className="stat-grid leave-stat-grid">
+                {[
+                  [t("leave.approvedDays"), analytics.summary.approvedLeaveDays, <CalendarDays key="approved-days" size={18} />],
+                  [t("leave.teachersOnLeave"), analytics.summary.distinctTeachers, <UserRoundCheck key="teachers-on-leave" size={18} />],
+                  [t("leave.pending"), analytics.summary.pending, <Clock3 key="pending-applications" size={18} />]
+                ].map(([label, value, icon]) => (
+                  <article className="stat-card" key={String(label)}>
+                    <div className="stat-header">
+                      <span className="stat-title">{label}</span>
+                      <span className="stat-icon">{icon}</span>
+                    </div>
+                    <strong className="stat-value">{value}</strong>
+                  </article>
+                ))}
+              </div>
+
+              <div className="charts-grid">
+                <section className="chart-panel">
+                  <div className="panel-header"><h3>{t("leave.trend")}</h3></div>
+                  <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={analytics.trend}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                      <XAxis dataKey="period" tickFormatter={(value) => granularity === "day" ? dateKeyToDisplay(value) : value} />
+                      <YAxis allowDecimals={false} />
+                      <Tooltip labelFormatter={(value) => granularity === "day" ? dateKeyToDisplay(String(value)) : value} />
+                      <Bar dataKey="leaveDays" fill="var(--accent-primary)" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </section>
+                <section className="table-panel leave-analytics-table">
+                  <div className="table-header">
+                    <h2 className="panel-title">{t("leave.byTeacher")}</h2>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          <th>{t("leave.teacher")}</th>
+                          <th>{t("leave.days")}</th>
+                          <th>{t("leave.requests")}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analytics.teachers.map((teacher) => (
+                          <tr key={teacher.teacherId}>
+                            <td>{teacher.teacherName}<small className="leave-cell-subtitle">{teacher.className || "-"}</small></td>
+                            <td>{teacher.approvedDays}</td>
+                            <td>{teacher.decidedRequests}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
+
+      {selected ? (
+        <div className="modal-backdrop" onClick={closeDetails}>
+          <div className="modal-card leave-detail-modal" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-header">
+              <div className="modal-title-section">
+                <h2>{selected.teacherName}</h2>
+                <p className="panel-subtitle">{selected.fromDateLabel} - {selected.toDateLabel}</p>
+              </div>
+              <button className="icon-btn" onClick={closeDetails} aria-label={t("common.close")}><X size={16} /></button>
+            </div>
+
+            <div className="modal-body">
+              <section className="modal-details-section">
+                <dl className="leave-detail-list">
+                  <div className="leave-detail-item">
+                    <dt>{t("leave.statusLabel")}</dt>
+                    <dd><span className={`status-badge leave-${selected.status}`}>{t(`leave.status.${selected.status}`)}</span></dd>
+                  </div>
+                  <div className="leave-detail-item">
+                    <dt>{t("leave.reason")}</dt>
+                    <dd className="leave-detail-reason">{selected.reason}</dd>
+                  </div>
+                  <div className="leave-detail-item">
+                    <dt>{t("leave.requestedDays")}</dt>
+                    <dd>{selected.requestedWorkingDays}</dd>
+                  </div>
+                  {selected.approvedWorkingDays ? (
+                    <div className="leave-detail-item">
+                      <dt>{t("leave.approvedRange")}</dt>
+                      <dd>{selected.approvedFromDateLabel} - {selected.approvedToDateLabel} ({selected.approvedWorkingDays})</dd>
+                    </div>
+                  ) : null}
+                  {selected.decisionNote ? (
+                    <div className="leave-detail-item">
+                      <dt>{t("leave.adminNote")}</dt>
+                      <dd className="leave-detail-reason">{selected.decisionNote}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+              </section>
+
+              {role === "admin" && selected.status === "pending" ? (
+                <section className="modal-action-section leave-decision-section">
+                  <h3 className="section-title">{t("leave.decisionTitle") || "Leave Decision"}</h3>
+                  <form className="leave-decision-form" onSubmit={decide}>
+                    <div className="decision-buttons">
+                      <div className="manage-tabs">
+                        {(["approve", "partially_approve", "reject"] as const).map((value) => (
+                          <button key={value} type="button" className={`tab-btn ${decision === value ? "active" : ""}`} onClick={() => setDecision(value)}>
+                            {value === "reject" ? <X size={15} /> : <Check size={15} />}{t(`leave.decision.${value}`)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {decision === "partially_approve" ? (
+                      <div className="form-grid leave-date-grid">
+                        <DateField id="approved-from" label={t("leave.approvedFrom")} value={approvedFromDate} onChange={setApprovedFromDate} minDate={selected.fromDate} maxDate={selected.toDate} required />
+                        <DateField id="approved-to" label={t("leave.approvedTo")} value={approvedToDate} onChange={setApprovedToDate} minDate={selected.fromDate} maxDate={selected.toDate} required />
+                      </div>
+                    ) : null}
+                    <div className="form-field">
+                      <label htmlFor="decision-note">{t("leave.adminNoteOptional")}</label>
+                      <textarea id="decision-note" value={decisionNote} onChange={(event) => setDecisionNote(event.target.value)} maxLength={1000} placeholder={t("leave.adminNotePlaceholder") || "Add optional note..."} />
+                    </div>
+                    <button className="primary-btn" disabled={saving} type="submit">{saving ? t("leave.saving") : t("leave.saveDecision")}</button>
+                  </form>
+                </section>
+              ) : null}
+
+              {role === "admin" && canRevoke(selected) ? (
+                <section className="modal-action-section leave-revoke-section">
+                  <h3 className="section-title">{t("leave.rejectApproved")}</h3>
+                  <form className="leave-decision-form" onSubmit={(event) => { event.preventDefault(); void revokeApproval(selected); }}>
+                    <div className="form-field">
+                      <label htmlFor="revoke-note">{t("leave.revokeNoteLabel")}<span className="req">*</span></label>
+                      <textarea id="revoke-note" value={revokeNote} onChange={(event) => setRevokeNote(event.target.value)} maxLength={1000} minLength={3} required placeholder={t("leave.revokeNotePlaceholder") || "Enter reason for rejection..."} />
+                    </div>
+                    <button className="primary-btn danger-text" disabled={saving || !revokeNote.trim()} type="submit">
+                      <X size={15} />{saving ? t("leave.saving") : t("leave.rejectApproved")}
+                    </button>
+                  </form>
+                </section>
+              ) : null}
+
+              {role === "admin" && !canRevoke(selected) && (selected.status === "approved" || selected.status === "partially_approved") ? (
+                <section className="modal-message-section">
+                  <p className="panel-subtitle leave-revoke-hint">{t("leave.revokeUnavailable")}</p>
+                </section>
+              ) : null}
+            </div>
+
+            {(role === "teacher" && canCancel(selected)) || (role === "admin" && selected.teacherWhatsAppLink) ? (
+              <div className="modal-footer">
+                <div className="modal-footer-actions">
+                  {role === "teacher" && canCancel(selected) ? (
+                    <button type="button" className="ghost-btn danger-text" disabled={saving} onClick={() => void withdraw(selected)}>
+                      {selected.status === "pending" ? t("leave.withdraw") : t("leave.cancelLeave")}
+                    </button>
+                  ) : null}
+                  {role === "teacher" && selected.status === "pending" ? (
+                    <WhatsAppButton link={selected.adminWhatsAppLink} label={selected.hasAdminWhatsAppNumber ? t("leave.messageAdmin") : t("leave.shareWhatsApp")} />
+                  ) : null}
+                  {role === "admin" && selected.teacherWhatsAppLink ? (
+                    <WhatsAppButton link={selected.teacherWhatsAppLink} label={selected.hasTeacherWhatsAppNumber ? t("leave.notifyTeacher") : t("leave.shareWhatsApp")} />
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -25,7 +25,7 @@ const teacherAttendanceRecordSchema = new mongoose.Schema(
     submittedAccuracyMeters: { type: Number },
     distanceMeters: { type: Number },
     status: { type: String, enum: TEACHER_ATTENDANCE_STATUSES, required: true, index: true },
-    source: { type: String, enum: ["self", "admin_correction", "system_leave_sync"], required: true },
+    source: { type: String, enum: ["self", "admin_correction", "system_leave_sync", "manual_application"], required: true },
     correctedToStatus: { type: String, enum: ["on_time", "late", "on_leave"] },
     correctionReason: { type: String, trim: true },
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },

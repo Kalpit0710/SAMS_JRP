@@ -44,7 +44,12 @@ export const LeaveListQuerySchema = z.object({
   status: z.enum(["pending", "approved", "partially_approved", "rejected", "withdrawn"]).optional(),
   teacherId: z.string().optional(),
   fromDate: DateKeySchema.optional(),
-  toDate: DateKeySchema.optional()
+  toDate: DateKeySchema.optional(),
+  scope: z.enum(["upcoming", "past", "all"]).default("upcoming")
+});
+
+export const LeaveRevokeSchema = z.object({
+  note: z.string().trim().min(3).max(1000)
 });
 
 export const LeaveAnalyticsQuerySchema = z.object({

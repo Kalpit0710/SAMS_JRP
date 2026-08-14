@@ -23,6 +23,10 @@ function futureDateKey(offset: number) {
   ].join("-");
 }
 
+function pastDateKey(offset: number) {
+  return futureDateKey(-offset);
+}
+
 function displayDate(dateKey: string) {
   const [year, month, day] = dateKey.split("-");
   return `${day}/${month}/${year}`;
@@ -305,5 +309,185 @@ describe("teacher leave management", () => {
     await expect.poll(() => AuditLogModel.countDocuments({
       action: { $in: ["LEAVE_SETTINGS_UPDATE", "LEAVE_REQUEST_DECIDE"] }
     })).toBeGreaterThanOrEqual(2);
+  });
+
+  it("lets admin reject an approved leave and teacher cancel an upcoming approved leave, and filters by scope", async () => {
+    await UserModel.create({
+      fullName: "Revoke Admin",
+      username: "revoke.admin",
+      passwordHash: await hashPassword("Admin@12345"),
+      roles: ["admin"],
+      isActive: true
+    });
+    const teacherUser = await UserModel.create({
+      fullName: "Revoke Teacher",
+      username: "revoke.teacher",
+      passwordHash: await hashPassword("Teacher@12345"),
+      roles: ["teacher"],
+      isActive: true
+    });
+    const classDoc = await ClassModel.create({ name: "Class Revoke" });
+    await TeacherModel.create({
+      userId: teacherUser._id,
+      fullName: "Revoke Teacher",
+      classId: classDoc._id,
+      phoneNumber: "9777777777",
+      isActive: true
+    });
+    const { agent: adminAgent, accessToken: adminToken } = await loginAs("revoke.admin", "Admin@12345");
+    const { agent: teacherAgent, accessToken: teacherToken } = await loginAs("revoke.teacher", "Teacher@12345");
+    await adminAgent
+      .put("/api/leaves/settings")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ adminWhatsAppNumber: "9000000003", nonWorkingWeekdays: [], holidays: [] });
+
+    const dateA = futureDateKey(5);
+    const dateB = futureDateKey(6);
+    const firstLeave = await teacherAgent
+      .post("/api/leaves")
+      .set("Authorization", `Bearer ${teacherToken}`)
+      .send({ fromDate: dateA, toDate: dateA, reason: "First upcoming leave" });
+    expect(firstLeave.status).toBe(201);
+    const secondLeave = await teacherAgent
+      .post("/api/leaves")
+      .set("Authorization", `Bearer ${teacherToken}`)
+      .send({ fromDate: dateB, toDate: dateB, reason: "Second upcoming leave" });
+    expect(secondLeave.status).toBe(201);
+
+    const approvedFirst = await adminAgent
+      .post(`/api/leaves/${firstLeave.body.item._id}/decision`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ decision: "approve" });
+    expect(approvedFirst.status).toBe(200);
+    expect(approvedFirst.body.item.status).toBe("approved");
+
+    // admin can reject an already-approved leave, but a reason is required.
+    const revokeNoReason = await adminAgent
+      .post(`/api/leaves/${firstLeave.body.item._id}/revoke`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({});
+    expect(revokeNoReason.status).toBe(400);
+
+    const revoked = await adminAgent
+      .post(`/api/leaves/${firstLeave.body.item._id}/revoke`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ note: "Coverage changed" });
+    expect(revoked.status).toBe(200);
+    expect(revoked.body.item.status).toBe("rejected");
+    expect(revoked.body.item.activeDates).toEqual([]);
+    expect(revoked.body.item.decisionNote).toBe("Coverage changed");
+
+    const revokeAgain = await adminAgent
+      .post(`/api/leaves/${firstLeave.body.item._id}/revoke`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ note: "Already decided" });
+    expect(revokeAgain.status).toBe(409);
+
+    const approvedSecond = await adminAgent
+      .post(`/api/leaves/${secondLeave.body.item._id}/decision`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ decision: "approve" });
+    expect(approvedSecond.status).toBe(200);
+
+    // teacher can cancel their own upcoming approved leave via the same withdraw endpoint.
+    const cancelled = await teacherAgent
+      .post(`/api/leaves/${secondLeave.body.item._id}/withdraw`)
+      .set("Authorization", `Bearer ${teacherToken}`);
+    expect(cancelled.status).toBe(200);
+    expect(cancelled.body.item.status).toBe("withdrawn");
+    expect(cancelled.body.item.activeDates).toEqual([]);
+
+    const cancelAgain = await teacherAgent
+      .post(`/api/leaves/${secondLeave.body.item._id}/withdraw`)
+      .set("Authorization", `Bearer ${teacherToken}`);
+    expect(cancelAgain.status).toBe(409);
+
+    // scope=past should hide both (both are upcoming dates), scope=upcoming (default) should show them.
+    const upcomingList = await teacherAgent
+      .get("/api/leaves?scope=upcoming")
+      .set("Authorization", `Bearer ${teacherToken}`);
+    expect(upcomingList.status).toBe(200);
+    expect(upcomingList.body.items.map((item: { _id: string }) => item._id).sort()).toEqual(
+      [firstLeave.body.item._id, secondLeave.body.item._id].sort()
+    );
+
+    const pastList = await teacherAgent
+      .get("/api/leaves?scope=past")
+      .set("Authorization", `Bearer ${teacherToken}`);
+    expect(pastList.status).toBe(200);
+    expect(pastList.body.items).toHaveLength(0);
+  });
+
+  it("blocks admin from rejecting an approved leave that has already started or passed", async () => {
+    await UserModel.create({
+      fullName: "Past Revoke Admin",
+      username: "pastrevoke.admin",
+      passwordHash: await hashPassword("Admin@12345"),
+      roles: ["admin"],
+      isActive: true
+    });
+    const teacherUser = await UserModel.create({
+      fullName: "Past Revoke Teacher",
+      username: "pastrevoke.teacher",
+      passwordHash: await hashPassword("Teacher@12345"),
+      roles: ["teacher"],
+      isActive: true
+    });
+    const classDoc = await ClassModel.create({ name: "Class Past Revoke" });
+    const teacher = await TeacherModel.create({
+      userId: teacherUser._id,
+      fullName: "Past Revoke Teacher",
+      classId: classDoc._id,
+      phoneNumber: "9666666666",
+      isActive: true
+    });
+    const { agent: adminAgent, accessToken: adminToken } = await loginAs("pastrevoke.admin", "Admin@12345");
+
+    const pastFrom = pastDateKey(5);
+    const pastTo = pastDateKey(3);
+    const pastLeave = await LeaveRequestModel.create({
+      teacherId: teacher._id,
+      teacherUserId: teacherUser._id,
+      teacherName: teacher.fullName,
+      classId: teacher.classId,
+      className: classDoc.name,
+      fromDate: pastFrom,
+      toDate: pastTo,
+      reason: "Already taken leave",
+      requestedWorkingDates: [pastFrom, pastTo],
+      approvedWorkingDates: [pastFrom, pastTo],
+      activeDates: [pastFrom, pastTo],
+      status: "approved"
+    });
+
+    const blocked = await adminAgent
+      .post(`/api/leaves/${pastLeave._id}/revoke`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ note: "Trying to undo a past leave" });
+    expect(blocked.status).toBe(409);
+
+    const unchanged = await LeaveRequestModel.findById(pastLeave._id).lean();
+    expect(unchanged?.status).toBe("approved");
+
+    // an ongoing leave (already started, not yet finished) is also blocked.
+    const ongoingLeave = await LeaveRequestModel.create({
+      teacherId: teacher._id,
+      teacherUserId: teacherUser._id,
+      teacherName: teacher.fullName,
+      classId: teacher.classId,
+      className: classDoc.name,
+      fromDate: pastDateKey(1),
+      toDate: futureDateKey(1),
+      reason: "Ongoing leave",
+      requestedWorkingDates: [pastDateKey(1), futureDateKey(1)],
+      approvedWorkingDates: [pastDateKey(1), futureDateKey(1)],
+      activeDates: [pastDateKey(1), futureDateKey(1)],
+      status: "approved"
+    });
+    const blockedOngoing = await adminAgent
+      .post(`/api/leaves/${ongoingLeave._id}/revoke`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ note: "Trying to undo an ongoing leave" });
+    expect(blockedOngoing.status).toBe(409);
   });
 });

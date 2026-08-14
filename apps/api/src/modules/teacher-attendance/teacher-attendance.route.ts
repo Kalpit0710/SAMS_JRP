@@ -1,6 +1,5 @@
 import mongoose from "mongoose";
 import { Router } from "express";
-import { verifyPassword } from "../../models/user.model.js";
 import { asyncHandler } from "../../lib/async-handler.js";
 import { setAuditMeta } from "../../middleware/audit-log.middleware.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.middleware.js";
@@ -11,10 +10,14 @@ import {
   TeacherAttendanceRecordModel,
   type TeacherAttendanceFailureCode,
 } from "../../models/teacher-attendance.model.js";
+import { TeacherAttendanceRequestModel } from "../../models/teacher-attendance-request.model.js";
 import { getTeacherAttendanceSettings, TeacherAttendanceSettingsModel } from "../../models/teacher-attendance-settings.model.js";
 import {
+  AttendanceRequestListQuerySchema,
   CorrectTeacherAttendanceSchema,
+  CreateAttendanceRequestSchema,
   MarkTeacherAttendanceSchema,
+  ReviewAttendanceRequestSchema,
   TeacherAttendanceHistorySchema,
   TeacherAttendanceOverviewSchema,
   TeacherAttendanceSettingsSchema,
@@ -22,7 +25,6 @@ import {
 } from "./teacher-attendance.schema.js";
 
 const SCHOOL_TIMEZONE = "Asia/Kolkata";
-const MAX_FAILED_PIN_ATTEMPTS = 5;
 const FAILURE_MESSAGES: Record<string, string> = {
   already_marked: "Teacher attendance is already marked for today",
   outside_window: "Attendance can only be marked during the configured window",
@@ -325,5 +327,153 @@ teacherAttendanceRouter.patch(
       metadata: { recordId: record.id, original, correctedToStatus: parsed.data.correctedToStatus, correctionReason: parsed.data.correctionReason }
     });
     return res.json({ item: record });
+  })
+);
+
+// Teacher-initiated correction / manual-attendance requests, subject to admin approval.
+teacherAttendanceRouter.post(
+  "/requests",
+  requireRoles(["teacher"]),
+  asyncHandler(async (req, res) => {
+    const parsed = CreateAttendanceRequestSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid attendance request", errors: parsed.error.flatten() });
+    const teacher = await getTeacher(req.auth!.userId);
+    if (!teacher) return res.status(403).json({ message: "Teacher account is not active" });
+    if (parsed.data.attendanceDate > schoolDateKey()) {
+      return res.status(400).json({ message: "Attendance date cannot be in the future" });
+    }
+
+    const existingRecord = await TeacherAttendanceRecordModel.findOne({ teacherId: teacher._id, attendanceDate: parsed.data.attendanceDate });
+    if (parsed.data.requestType === "correction" && !existingRecord) {
+      return res.status(409).json({ message: "No existing attendance record found for this date to correct" });
+    }
+    if (parsed.data.requestType === "manual" && existingRecord) {
+      return res.status(409).json({ message: "Attendance is already marked for this date" });
+    }
+
+    await teacher.populate("classId", "name");
+    const populatedClass = teacher.classId && typeof teacher.classId === "object" && "name" in teacher.classId
+      ? teacher.classId as unknown as { _id: mongoose.Types.ObjectId; name: string }
+      : undefined;
+
+    let created;
+    try {
+      created = await TeacherAttendanceRequestModel.create({
+        teacherId: teacher._id,
+        teacherUserId: req.auth!.userId,
+        teacherName: teacher.fullName,
+        classId: populatedClass?._id ?? teacher.classId,
+        className: populatedClass?.name ?? "",
+        attendanceDate: parsed.data.attendanceDate,
+        requestType: parsed.data.requestType,
+        requestedStatus: parsed.data.requestedStatus,
+        reason: parsed.data.reason,
+        existingRecordId: existingRecord?._id
+      });
+    } catch (error) {
+      if ((error as { code?: number }).code === 11000) {
+        return res.status(409).json({ message: "A pending request already exists for this date" });
+      }
+      throw error;
+    }
+
+    setAuditMeta(res, {
+      action: "TEACHER_ATTENDANCE_REQUEST_CREATE",
+      resource: "teacher-attendance/request",
+      metadata: { requestId: created.id, attendanceDate: created.attendanceDate, requestType: created.requestType }
+    });
+    return res.status(201).json({ item: created });
+  })
+);
+
+teacherAttendanceRouter.get(
+  "/requests/me",
+  requireRoles(["teacher"]),
+  asyncHandler(async (req, res) => {
+    const parsed = AttendanceRequestListQuerySchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid request query" });
+    const teacher = await getTeacher(req.auth!.userId);
+    if (!teacher) return res.status(403).json({ message: "Teacher account is not active" });
+    const filter: Record<string, unknown> = { teacherId: teacher._id };
+    if (parsed.data.status) filter.status = parsed.data.status;
+    const [items, total] = await Promise.all([
+      TeacherAttendanceRequestModel.find(filter).sort({ createdAt: -1 }).skip((parsed.data.page - 1) * parsed.data.pageSize).limit(parsed.data.pageSize).lean(),
+      TeacherAttendanceRequestModel.countDocuments(filter)
+    ]);
+    return res.json({ items, total, page: parsed.data.page, pageSize: parsed.data.pageSize, totalPages: Math.max(1, Math.ceil(total / parsed.data.pageSize)) });
+  })
+);
+
+teacherAttendanceRouter.get(
+  "/admin/requests",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const parsed = AttendanceRequestListQuerySchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid request query" });
+    const filter: Record<string, unknown> = {};
+    if (parsed.data.status) filter.status = parsed.data.status;
+    const [items, total] = await Promise.all([
+      TeacherAttendanceRequestModel.find(filter).sort({ createdAt: -1 }).skip((parsed.data.page - 1) * parsed.data.pageSize).limit(parsed.data.pageSize).lean(),
+      TeacherAttendanceRequestModel.countDocuments(filter)
+    ]);
+    return res.json({ items, total, page: parsed.data.page, pageSize: parsed.data.pageSize, totalPages: Math.max(1, Math.ceil(total / parsed.data.pageSize)) });
+  })
+);
+
+teacherAttendanceRouter.patch(
+  "/admin/requests/:id/review",
+  requireRoles(["admin"]),
+  asyncHandler(async (req, res) => {
+    const parsed = ReviewAttendanceRequestSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ message: "Invalid review payload", errors: parsed.error.flatten() });
+    const request = await TeacherAttendanceRequestModel.findById(req.params.id);
+    if (!request) return res.status(404).json({ message: "Attendance request not found" });
+    if (request.status !== "pending") return res.status(409).json({ message: "Request has already been decided" });
+
+    const adminUserId = new mongoose.Types.ObjectId(req.auth!.userId);
+    request.status = parsed.data.decision;
+    request.decisionNote = parsed.data.decisionNote;
+    request.decidedBy = adminUserId;
+    request.decidedAt = new Date();
+    await request.save();
+
+    let record;
+    if (parsed.data.decision === "approved") {
+      if (request.requestType === "correction" && request.existingRecordId) {
+        record = await TeacherAttendanceRecordModel.findById(request.existingRecordId);
+        if (record) {
+          record.status = "corrected";
+          record.correctedToStatus = request.requestedStatus;
+          record.correctionReason = request.reason;
+          record.source = "admin_correction";
+          record.updatedBy = adminUserId;
+          await record.save();
+        }
+      } else if (request.requestType === "manual") {
+        try {
+          record = await TeacherAttendanceRecordModel.create({
+            teacherId: request.teacherId,
+            attendanceDate: request.attendanceDate,
+            checkInAtServer: new Date(`${request.attendanceDate}T00:00:00`),
+            status: request.requestedStatus,
+            source: "manual_application",
+            createdBy: request.teacherUserId,
+            updatedBy: adminUserId
+          });
+        } catch (error) {
+          if ((error as { code?: number }).code === 11000) {
+            return res.status(409).json({ message: "Attendance was already marked for this date before approval" });
+          }
+          throw error;
+        }
+      }
+    }
+
+    setAuditMeta(res, {
+      action: "TEACHER_ATTENDANCE_REQUEST_REVIEW",
+      resource: "teacher-attendance/request",
+      metadata: { requestId: request.id, decision: parsed.data.decision, requestType: request.requestType }
+    });
+    return res.json({ item: request, record });
   })
 );

@@ -10,7 +10,7 @@ import {
   Activity, CheckCircle, ChevronRight, ChevronsLeft, ChevronsRight, Clock,
   LayoutDashboard, LayoutGrid, List, LogOut, MoreHorizontal, Rows3, Settings, ShieldAlert,
   Sun, Users, CheckSquare, AlertTriangle, AlertCircle, BarChart as BarChartIcon,
-  CalendarDays, Database, MessageCircle, FileSpreadsheet, UserX, X
+  Database, MessageCircle, FileSpreadsheet, UserX, X
 } from "lucide-react";
 import { setLanguage } from "./i18n";
 import { PageLoader, InlineLoader } from "./components/Loader";
@@ -19,7 +19,6 @@ import { ATTENDANCE_VIEW_MODE_KEY, DEFAULT_REPORT_DAYS_KEY } from "./lib/prefere
 import { useToast } from "./lib/toast";
 import DataTransferPage from "./pages/DataTransferPage";
 import LandingPage from "./pages/LandingPage";
-import LeavePage from "./pages/LeavePage";
 import ManagePage from "./pages/ManagePage";
 import NotificationsPage from "./pages/NotificationsPage";
 import SettingsPage from "./pages/SettingsPage";
@@ -1704,7 +1703,6 @@ function App() {
     { to: "/dashboard", label: t("nav.dashboard"), icon: <LayoutDashboard size={20} />, allow: dashboardRoles },
     { to: "/attendance", label: t("nav.attendance"), icon: <CheckSquare size={20} />, allow: attendanceRoles },
     { to: "/teacher-attendance", label: t("nav.teacherAttendance"), icon: <Clock size={20} />, allow: attendanceRoles },
-    { to: "/leaves", label: t("nav.leaves"), icon: <CalendarDays size={20} />, allow: leaveRoles },
     { to: "/manage", label: t("nav.masterData"), icon: <Database size={20} />, allow: manageRoles },
     { to: "/alerts", label: t("nav.whatsappAlerts"), icon: <MessageCircle size={20} />, allow: notificationRoles },
     { to: "/data", label: t("nav.importExport"), icon: <FileSpreadsheet size={20} />, allow: dataTransferRoles },
@@ -1719,7 +1717,12 @@ function App() {
   const activeNavLabel =
     location.pathname.startsWith("/settings")
       ? t("nav.settings")
-      : visibleNavItems.find((item) => location.pathname.startsWith(item.to))?.label ?? t("nav.dashboard");
+      : location.pathname.startsWith("/leaves")
+        ? t("nav.teacherAttendance")
+        : visibleNavItems.find((item) => location.pathname.startsWith(item.to))?.label ?? t("nav.dashboard");
+  // /leaves is a deep-link into the Teacher Attendance page's Leave Portal tab, not its own nav entry.
+  const isNavItemActive = (path: string) =>
+    location.pathname.startsWith(path) || (path === "/teacher-attendance" && location.pathname.startsWith("/leaves"));
 
   return (
     <div className="app-layout">
@@ -1738,7 +1741,7 @@ function App() {
               to={item.to}
               className={classNames(
                 "nav-item",
-                location.pathname.startsWith(item.to) && "active",
+                isNavItemActive(item.to) && "active",
                 index >= mobilePrimaryCount && "mobile-overflow-item"
               )}
               data-tooltip={item.label}
@@ -1803,7 +1806,7 @@ function App() {
                 <Link
                   key={item.to}
                   to={item.to}
-                  className={classNames("nav-item", location.pathname.startsWith(item.to) && "active")}
+                  className={classNames("nav-item", isNavItemActive(item.to) && "active")}
                   onClick={() => setMobileMoreOpen(false)}
                 >
                   {item.icon}
@@ -1910,7 +1913,7 @@ function App() {
             path="/leaves"
             element={
               <RoleGuard role={activeRole} allow={leaveRoles}>
-                <LeavePage role={activeRole} requestWithAuth={requestWithAuth} />
+                <TeacherAttendancePage requestWithAuth={requestWithAuth} isAdmin={activeRole === "admin"} initialTab="leave" />
               </RoleGuard>
             }
           />
