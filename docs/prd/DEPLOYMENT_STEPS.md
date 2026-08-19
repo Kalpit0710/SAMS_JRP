@@ -99,6 +99,7 @@ Before syncing the Blueprint, confirm that `main` exists on GitHub.
 | ------------------ | ----------------------------------------- |
 | `MONGODB_URI`      | Atlas URI ending in `/sams`                |
 | `CORS_ORIGIN`      | Exact `https://...` URL of `sams-web-prod` |
+| `PUBLIC_APP_URL`   | Same public Vercel URL, without `/api`     |
 | `SCHOOL_NAME`      | Production school name                    |
 | `ACADEMIC_SESSION` | Current production session                |
 
@@ -124,6 +125,11 @@ Use the Render origin without a trailing slash:
 
 Vercel reads this variable when creating each deployment. Redeploy production after
 adding or changing it.
+
+Use the same public Vercel origin for Render's `PUBLIC_APP_URL`. Teacher-leave
+WhatsApp messages use it to open the authenticated application detail page. A preview
+deployment URL must not be configured here because messages need a stable production
+destination.
 
 ## 8. Configure GitHub environments
 

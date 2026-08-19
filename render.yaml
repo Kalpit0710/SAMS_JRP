@@ -33,6 +33,8 @@ projects:
                 generateValue: true
               - key: CORS_ORIGIN
                 sync: false
+              - key: PUBLIC_APP_URL
+                sync: false
               - key: SCHOOL_NAME
                 sync: false
               - key: ACADEMIC_SESSION

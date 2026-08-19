@@ -74,7 +74,6 @@ describe("auth and reporting integration", () => {
     });
 
     expect(login.status).toBe(200);
-    const teacherAccessToken = login.body.accessToken as string;
     expect(login.body.user.activeRole).toBe("teacher");
     expect(typeof login.body.accessToken).toBe("string");
 
@@ -423,10 +422,6 @@ describe("auth and reporting integration", () => {
       })
     ]);
 
-    const secondPage = await teacherAgent
-      .get("/api/reports/class-view?page=2&pageSize=1")
-      .set("Authorization", `Bearer ${teacherAccessToken}`);
-
     const secondPageCheck = await teacherAgent
       .get("/api/reports/class-view?page=2&pageSize=1")
       .set("Authorization", `Bearer ${teacherAccessToken}`);
@@ -441,10 +436,6 @@ describe("auth and reporting integration", () => {
         attendanceRate: 0
       })
     ]);
-
-    const studentHistory = await teacherAgent
-      .get(`/api/reports/student-history/${studentA1.id}`)
-      .set("Authorization", `Bearer ${teacherAccessToken}`);
 
     const studentHistoryCheck = await teacherAgent
       .get(`/api/reports/student-history/${studentA1.id}`)

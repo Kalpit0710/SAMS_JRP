@@ -22,6 +22,7 @@ import LandingPage from "./pages/LandingPage";
 import ManagePage from "./pages/ManagePage";
 import NotificationsPage from "./pages/NotificationsPage";
 import SettingsPage from "./pages/SettingsPage";
+import TeacherAttendancePage from "./pages/TeacherAttendancePage";
 
 type BackendRole = "admin" | "teacher";
 type UiRole = BackendRole;
@@ -244,6 +245,7 @@ const manageRoles: UiRole[] = ["admin"];
 // Teachers need Settings to change their own PIN; admin-only cards stay gated by canEditMasterData.
 const settingsRoles: UiRole[] = ["admin", "teacher"];
 const notificationRoles: UiRole[] = ["admin", "teacher"];
+const leaveRoles: UiRole[] = ["admin", "teacher"];
 const dataTransferRoles: UiRole[] = ["admin"];
 /** Roles allowed to mutate master data / settings; others get read-only screens. */
 const masterDataWriteRoles: UiRole[] = ["admin"];
@@ -1913,6 +1915,10 @@ function App() {
           path="/login"
           element={<LoginPage onLogin={handleLogin} pending={loginPending} error={loginError} />}
         />
+        <Route
+          path="/leaves"
+          element={<LoginPage onLogin={handleLogin} pending={loginPending} error={loginError} />}
+        />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     );
@@ -1926,6 +1932,7 @@ function App() {
   const navItems: Array<{ to: string; label: string; allow: UiRole[]; icon: React.ReactNode }> = [
     { to: "/dashboard", label: t("nav.dashboard"), icon: <LayoutDashboard size={20} />, allow: dashboardRoles },
     { to: "/attendance", label: t("nav.attendance"), icon: <CheckSquare size={20} />, allow: attendanceRoles },
+    { to: "/teacher-attendance", label: t("nav.teacherAttendance"), icon: <Clock size={20} />, allow: attendanceRoles },
     { to: "/manage", label: t("nav.masterData"), icon: <Database size={20} />, allow: manageRoles },
     { to: "/alerts", label: t("nav.whatsappAlerts"), icon: <MessageCircle size={20} />, allow: notificationRoles },
     { to: "/data", label: t("nav.importExport"), icon: <FileSpreadsheet size={20} />, allow: dataTransferRoles },
@@ -1940,7 +1947,12 @@ function App() {
   const activeNavLabel =
     location.pathname.startsWith("/settings")
       ? t("nav.settings")
-      : visibleNavItems.find((item) => location.pathname.startsWith(item.to))?.label ?? t("nav.dashboard");
+      : location.pathname.startsWith("/leaves")
+        ? t("nav.teacherAttendance")
+        : visibleNavItems.find((item) => location.pathname.startsWith(item.to))?.label ?? t("nav.dashboard");
+  // /leaves is a deep-link into the Teacher Attendance page's Leave Portal tab, not its own nav entry.
+  const isNavItemActive = (path: string) =>
+    location.pathname.startsWith(path) || (path === "/teacher-attendance" && location.pathname.startsWith("/leaves"));
 
   return (
     <div className="app-layout">
@@ -1959,7 +1971,7 @@ function App() {
               to={item.to}
               className={classNames(
                 "nav-item",
-                location.pathname.startsWith(item.to) && "active",
+                isNavItemActive(item.to) && "active",
                 index >= mobilePrimaryCount && "mobile-overflow-item"
               )}
               data-tooltip={item.label}
@@ -2024,7 +2036,7 @@ function App() {
                 <Link
                   key={item.to}
                   to={item.to}
-                  className={classNames("nav-item", location.pathname.startsWith(item.to) && "active")}
+                  className={classNames("nav-item", isNavItemActive(item.to) && "active")}
                   onClick={() => setMobileMoreOpen(false)}
                 >
                   {item.icon}
@@ -2112,10 +2124,26 @@ function App() {
             }
           />
           <Route
+            path="/teacher-attendance"
+            element={
+              <RoleGuard role={activeRole} allow={attendanceRoles}>
+                <TeacherAttendancePage requestWithAuth={requestWithAuth} isAdmin={activeRole === "admin"} />
+              </RoleGuard>
+            }
+          />
+          <Route
             path="/reports"
             element={
               <RoleGuard role={activeRole} allow={reportRoles}>
                 <div className="page-content fade-in"><ReportsPage requestWithAuth={requestWithAuth} requestWithAuthRaw={requestWithAuthRaw} /></div>
+              </RoleGuard>
+            }
+          />
+          <Route
+            path="/leaves"
+            element={
+              <RoleGuard role={activeRole} allow={leaveRoles}>
+                <TeacherAttendancePage requestWithAuth={requestWithAuth} isAdmin={activeRole === "admin"} initialTab="leave" />
               </RoleGuard>
             }
           />

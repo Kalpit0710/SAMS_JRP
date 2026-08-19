@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { BellRing, Clock, KeyRound, LayoutDashboard, Lock, ShieldCheck } from "lucide-react";
+import { BellRing, CalendarDays, Clock, KeyRound, LayoutDashboard, Lock, MessageCircle, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { PageLoader } from "../components/Loader";
 import { PasswordInput } from "../components/PasswordInput";
+import { dateKeyToDisplay, displayDateToKey } from "../lib/date";
 import { DEFAULT_REPORT_DAYS_KEY } from "../lib/preferences";
 import { TOASTS_ENABLED_KEY, useToast } from "../lib/toast";
 
@@ -24,6 +25,19 @@ const lockOptions = [
 ];
 
 const reportDaysOptions = [7, 14, 30, 60, 90];
+const weekdays = [0, 1, 2, 3, 4, 5, 6] as const;
+
+type LeaveSettings = {
+  adminWhatsAppNumber: string;
+  nonWorkingWeekdays: number[];
+  holidays: Array<{ date: string; name: string }>;
+};
+
+type HolidayFormRow = { id: string; date: string; name: string };
+
+function createHolidayRow(date = "", name = ""): HolidayFormRow {
+  return { id: crypto.randomUUID(), date, name };
+}
 
 function describeLock(minutes: number, t: TFunction): string {
   if (minutes >= NEVER_LOCK_MINUTES) {
@@ -96,6 +110,13 @@ export function SettingsPage({
   const [pinError, setPinError] = useState<string | null>(null);
   const [pinNotice, setPinNotice] = useState<string | null>(null);
   const [pinSaving, setPinSaving] = useState(false);
+  const [adminWhatsAppNumber, setAdminWhatsAppNumber] = useState("");
+  const [nonWorkingWeekdays, setNonWorkingWeekdays] = useState<number[]>([0]);
+  const [holidays, setHolidays] = useState<HolidayFormRow[]>([]);
+  const [leaveSettingsLoading, setLeaveSettingsLoading] = useState(canEdit);
+  const [leaveSettingsSaving, setLeaveSettingsSaving] = useState(false);
+  const [leaveSettingsError, setLeaveSettingsError] = useState<string | null>(null);
+  const [leaveSettingsNotice, setLeaveSettingsNotice] = useState<string | null>(null);
 
   const changePin = async (event: FormEvent) => {
     event.preventDefault();
@@ -156,7 +177,28 @@ export function SettingsPage({
     } finally {
       setLoading(false);
     }
-  }, [requestWithAuth, t]);
+
+    if (!canEdit) {
+      setLeaveSettingsLoading(false);
+      return;
+    }
+
+    setLeaveSettingsLoading(true);
+    setLeaveSettingsError(null);
+    try {
+      const leaveSettings = await requestWithAuth<LeaveSettings>("/leaves/settings", { method: "GET" });
+      setAdminWhatsAppNumber(leaveSettings.adminWhatsAppNumber ?? "");
+      setNonWorkingWeekdays(leaveSettings.nonWorkingWeekdays ?? [0]);
+      setHolidays((leaveSettings.holidays ?? []).map((holiday) => createHolidayRow(
+        dateKeyToDisplay(holiday.date),
+        holiday.name
+      )));
+    } catch (loadError) {
+      setLeaveSettingsError(loadError instanceof Error ? loadError.message : t("settings.leaveLoadFailed"));
+    } finally {
+      setLeaveSettingsLoading(false);
+    }
+  }, [canEdit, requestWithAuth, t]);
 
   useEffect(() => {
     if (forcePasswordChange) {
@@ -202,6 +244,65 @@ export function SettingsPage({
     setDefaultReportDays(days);
     localStorage.setItem(DEFAULT_REPORT_DAYS_KEY, String(days));
     toast.success(t("settings.dateRangeUpdated"));
+  };
+
+  const toggleNonWorkingWeekday = (weekday: number, checked: boolean) => {
+    setNonWorkingWeekdays((current) => (
+      checked
+        ? [...new Set([...current, weekday])].sort((left, right) => left - right)
+        : current.filter((value) => value !== weekday)
+    ));
+  };
+
+  const updateHoliday = (index: number, field: keyof HolidayFormRow, value: string) => {
+    setHolidays((current) => current.map((holiday, rowIndex) => (
+      rowIndex === index ? { ...holiday, [field]: value } : holiday
+    )));
+  };
+
+  const saveLeaveSettings = async (event: FormEvent) => {
+    event.preventDefault();
+    setLeaveSettingsError(null);
+    setLeaveSettingsNotice(null);
+
+    const normalizedHolidays: Array<{ date: string; name: string }> = [];
+    for (const holiday of holidays) {
+      const date = displayDateToKey(holiday.date);
+      const name = holiday.name.trim();
+      if (!date || !name) {
+        setLeaveSettingsError(t("settings.leaveHolidayInvalid"));
+        return;
+      }
+      normalizedHolidays.push({ date, name });
+    }
+
+    if (new Set(normalizedHolidays.map((holiday) => holiday.date)).size !== normalizedHolidays.length) {
+      setLeaveSettingsError(t("settings.leaveHolidayDuplicate"));
+      return;
+    }
+
+    setLeaveSettingsSaving(true);
+    try {
+      const saved = await requestWithAuth<LeaveSettings>("/leaves/settings", {
+        method: "PUT",
+        body: JSON.stringify({
+          adminWhatsAppNumber: adminWhatsAppNumber.trim(),
+          nonWorkingWeekdays,
+          holidays: normalizedHolidays
+        })
+      });
+      setAdminWhatsAppNumber(saved.adminWhatsAppNumber ?? "");
+      setNonWorkingWeekdays(saved.nonWorkingWeekdays ?? []);
+      setHolidays((saved.holidays ?? []).map((holiday) => createHolidayRow(dateKeyToDisplay(holiday.date), holiday.name)));
+      setLeaveSettingsNotice(t("settings.leaveSettingsUpdated"));
+      toast.success(t("settings.leaveSettingsUpdated"));
+    } catch (saveError) {
+      const message = saveError instanceof Error ? saveError.message : t("settings.leaveSaveFailed");
+      setLeaveSettingsError(message);
+      toast.error(message);
+    } finally {
+      setLeaveSettingsSaving(false);
+    }
   };
 
   return (
@@ -408,6 +509,116 @@ export function SettingsPage({
             </div>
           </div>
         </section>
+
+        {canEdit ? (
+          <section className="table-panel settings-leave-panel">
+            <div className="table-header">
+              <div>
+                <h2 className="panel-title">
+                  <CalendarDays size={16} /> {t("settings.leaveTitle")}
+                </h2>
+                <p className="panel-subtitle">{t("settings.leaveDesc")}</p>
+              </div>
+            </div>
+
+            {leaveSettingsLoading ? (
+              <PageLoader label={t("settings.leaveLoading")} />
+            ) : (
+              <form className="settings-body leave-settings-form" onSubmit={saveLeaveSettings}>
+                <div className="form-field">
+                  <label htmlFor="admin-whatsapp-number">
+                    <MessageCircle size={14} /> {t("settings.adminWhatsAppNumber")}
+                  </label>
+                  <input
+                    id="admin-whatsapp-number"
+                    type="tel"
+                    inputMode="tel"
+                    maxLength={30}
+                    value={adminWhatsAppNumber}
+                    placeholder={t("settings.adminWhatsAppPlaceholder")}
+                    onChange={(event) => setAdminWhatsAppNumber(event.target.value)}
+                  />
+                  <p className="policy-hint">{t("settings.adminWhatsAppHint")}</p>
+                </div>
+
+                <fieldset className="leave-weekdays">
+                  <legend>{t("settings.nonWorkingWeekdays")}</legend>
+                  <div className="leave-weekday-options">
+                    {weekdays.map((weekday) => (
+                      <label className="checkbox-row" key={weekday}>
+                        <input
+                          type="checkbox"
+                          checked={nonWorkingWeekdays.includes(weekday)}
+                          onChange={(event) => toggleNonWorkingWeekday(weekday, event.target.checked)}
+                        />
+                        {t(`settings.weekday${weekday}`)}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <div className="leave-holidays">
+                  <div className="leave-holidays-header">
+                    <div>
+                      <h3>{t("settings.schoolHolidays")}</h3>
+                      <p className="policy-hint">{t("settings.schoolHolidaysHint")}</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost-btn"
+                      onClick={() => setHolidays((current) => [...current, createHolidayRow()])}
+                    >
+                      <Plus size={16} /> {t("settings.addHoliday")}
+                    </button>
+                  </div>
+
+                  {holidays.length === 0 ? <p className="locked-note">{t("settings.noHolidays")}</p> : null}
+                  {holidays.map((holiday, index) => (
+                    <div className="leave-holiday-row" key={holiday.id}>
+                      <div className="form-field">
+                        <label htmlFor={`holiday-date-${index}`}>{t("settings.holidayDate")}</label>
+                        <input
+                          id={`holiday-date-${index}`}
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="DD/MM/YYYY"
+                          maxLength={10}
+                          value={holiday.date}
+                          onChange={(event) => updateHoliday(index, "date", event.target.value)}
+                        />
+                      </div>
+                      <div className="form-field">
+                        <label htmlFor={`holiday-name-${index}`}>{t("settings.holidayName")}</label>
+                        <input
+                          id={`holiday-name-${index}`}
+                          type="text"
+                          maxLength={100}
+                          value={holiday.name}
+                          onChange={(event) => updateHoliday(index, "name", event.target.value)}
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        className="icon-btn danger"
+                        aria-label={t("settings.removeHoliday")}
+                        title={t("settings.removeHoliday")}
+                        onClick={() => setHolidays((current) => current.filter((_, rowIndex) => rowIndex !== index))}
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                {leaveSettingsError ? <p className="error-text">{leaveSettingsError}</p> : null}
+                {leaveSettingsNotice ? <p className="success-text">{leaveSettingsNotice}</p> : null}
+                <button type="submit" className="primary-btn" disabled={leaveSettingsSaving}>
+                  {leaveSettingsSaving ? t("settings.saving") : t("settings.saveLeaveSettings")}
+                </button>
+              </form>
+            )}
+          </section>
+        ) : null}
       </div>
     </div>
   );

@@ -31,10 +31,12 @@ Secondary Device: Desktop/Laptop Browser
 
 - **Admin** — full access: master data (classes, teachers, students) CRUD, attendance
   create/edit anytime, all reports and analytics, CSV import/export, attendance-lock
-  configuration, notification generation, audit logs, own-PIN change.
+  configuration, teacher-leave decisions and analytics, notification generation, audit
+  logs, own-PIN change.
 - **Teacher** — scoped to their single assigned class only (enforced server-side):
   mark and edit attendance within the lock window, view their class reports and alerts,
-  change their own PIN. No master-data writes, import/export, or audit access.
+  apply for leave, view/withdraw their own pending leave applications, and change their
+  own PIN. No master-data writes, import/export, or audit access.
 
 Removed from scope: Super Admin, Office Staff, and Parent roles/portal.
 
@@ -49,8 +51,13 @@ Removed from scope: Super Admin, Office Staff, and Parent roles/portal.
 - **Attendance** = one record per (classId, date); entries hold student status
   (present / absent / late / half_day). Submitted records are the historical snapshot
   and are not recomputed against the current roster.
+- **Teacher leave request** = one teacher-owned date range and reason, plus a pending,
+  approved, partially approved, rejected, or withdrawn status. Requested and approved
+  school-working-date snapshots preserve historical leave counts when calendar settings
+  later change.
 
-Removed: sections, separate parent records, and the leave statuses.
+Removed: sections, separate parent records, and leave statuses from student attendance.
+Teacher leave is a separate workflow and never changes attendance status or rates.
 
 ### 0.3 Key workflows
 
@@ -59,6 +66,15 @@ Removed: sections, separate parent records, and the leave statuses.
   to the lock policy.
 - Absence alerts: generated as ready-to-send WhatsApp (wa.me) links to the parent phone
   stored on the student. No paid/integrated WhatsApp API is in scope.
+- Teacher leave: teachers submit a From date, To date, and reason. Admins approve the
+  full range, approve one contiguous subrange, or reject it. Teachers may withdraw only
+  while pending. Dates are displayed as DD/MM/YYYY; approved leave totals count configured
+  school working days only.
+- Leave messages: submission and decision actions expose optional ready-to-send WhatsApp
+  links with an authenticated portal deep link. The portal does not send or claim delivery
+  automatically.
+- Leave analytics: admins can inspect day-wise, month-wise, and teacher-wise approved
+  leave counts. There are no leave balances, quotas, or remaining-day calculations.
 - Reports: daily/class analytics plus **CSV and PDF** export (not Excel).
 - Bulk data: **CSV** import/export with preview and validation (not Excel/.xlsx).
 - Bilingual UI: English and Hindi.

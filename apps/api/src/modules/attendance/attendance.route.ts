@@ -8,6 +8,7 @@ import { getAttendanceLockMinutes } from "../../models/attendance-settings.model
 import { ClassModel } from "../../models/class.model.js";
 import { StudentModel } from "../../models/student.model.js";
 import { TeacherModel } from "../../models/teacher.model.js";
+import { resolveSubstituteClassIds } from "../../lib/teacher-scope.js";
 import { syncNotificationsSafely } from "../notifications/notification.service.js";
 import { EditAttendanceSchema, SubmitAttendanceSchema } from "./attendance.schema.js";
 
@@ -15,13 +16,18 @@ export const attendanceRouter = Router();
 
 attendanceRouter.use(requireAuth);
 
-async function ensureTeacherClassAccess(userId: string, classId: string): Promise<boolean> {
+/** Owning teacher always, or a substitute only on the dates they are covering. */
+async function ensureTeacherClassAccess(userId: string, classId: string, dateKey?: string): Promise<boolean> {
   const teacher = await TeacherModel.findOne({ userId: new mongoose.Types.ObjectId(userId), isActive: true });
-  if (!teacher?.classId) {
+  if (teacher?.classId && teacher.classId.toString() === classId) {
+    return true;
+  }
+  if (!dateKey) {
     return false;
   }
 
-  return teacher.classId.toString() === classId;
+  const coveredClassIds = await resolveSubstituteClassIds(userId, dateKey);
+  return coveredClassIds.some((covered) => covered.toString() === classId);
 }
 
 function normalizeDate(dateString: string): Date {
@@ -66,7 +72,11 @@ attendanceRouter.post(
     }
 
     if (req.auth?.activeRole === "teacher") {
-      const hasAccess = await ensureTeacherClassAccess(req.auth.userId, parsed.data.classId);
+      const hasAccess = await ensureTeacherClassAccess(
+        req.auth.userId,
+        parsed.data.classId,
+        toDateKey(normalizeDate(parsed.data.attendanceDate))
+      );
       if (!hasAccess) {
         return res.status(403).json({ message: "Teacher is not assigned to this class" });
       }
@@ -173,7 +183,11 @@ attendanceRouter.patch(
     }]));
 
     if (req.auth?.activeRole === "teacher") {
-      const hasAccess = await ensureTeacherClassAccess(req.auth.userId, item.classId.toString());
+      const hasAccess = await ensureTeacherClassAccess(
+        req.auth.userId,
+        item.classId.toString(),
+        toDateKey(item.attendanceDate)
+      );
       if (!hasAccess) {
         return res.status(403).json({ message: "Teacher is not assigned to this class" });
       }
@@ -266,8 +280,12 @@ attendanceRouter.get(
       return res.status(400).json({ message: "Invalid classId" });
     }
 
+    const requestedDate = typeof req.query.date === "string"
+      ? normalizeDate(req.query.date)
+      : normalizeDate(new Date().toISOString());
+
     if (req.auth?.activeRole === "teacher") {
-      const hasAccess = await ensureTeacherClassAccess(req.auth.userId, classIdParam);
+      const hasAccess = await ensureTeacherClassAccess(req.auth.userId, classIdParam, toDateKey(requestedDate));
       if (!hasAccess) {
         return res.status(403).json({ message: "Teacher is not assigned to this class" });
       }
@@ -275,9 +293,7 @@ attendanceRouter.get(
 
     const classId = new mongoose.Types.ObjectId(classIdParam);
 
-    const attendanceDate = typeof req.query.date === "string"
-      ? normalizeDate(req.query.date)
-      : normalizeDate(new Date().toISOString());
+    const attendanceDate = requestedDate;
 
     const item = await AttendanceModel.findOne({ classId, attendanceDate });
 
