@@ -1,10 +1,30 @@
 import { z } from "zod";
+import { parseDateKey } from "../leaves/leave-calendar.js";
 import { TEACHER_DAY_STATUSES, timeToMinutes } from "./attendance-day.js";
 
 export { timeToMinutes };
 
 const TimeSchema = z.string().regex(/^\d{2}:\d{2}$/, "Time must use HH:mm");
-const DateKeySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+const DateKeySchema = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Date must use YYYY-MM-DD")
+  .refine((value) => parseDateKey(value) !== null, "Date must be a valid calendar date");
+const ObjectIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid identifier");
+const MAX_ATTENDANCE_RANGE_DAYS = 366;
+
+function validateDateRange(value: { from?: string; to?: string }, context: z.RefinementCtx) {
+  if (!value.from || !value.to) return;
+  const from = parseDateKey(value.from);
+  const to = parseDateKey(value.to);
+  if (!from || !to) return;
+  if (from > to) {
+    context.addIssue({ code: "custom", path: ["to"], message: "End date must be on or after start date" });
+    return;
+  }
+  const rangeDays = Math.floor((to.getTime() - from.getTime()) / 86_400_000) + 1;
+  if (rangeDays > MAX_ATTENDANCE_RANGE_DAYS) {
+    context.addIssue({ code: "custom", path: ["to"], message: `Date range cannot exceed ${MAX_ATTENDANCE_RANGE_DAYS} days` });
+  }
+}
 
 export const MarkTeacherAttendanceSchema = z.object({
   location: z.object({
@@ -46,25 +66,28 @@ export const TeacherAttendanceSettingsSchema = z.object({
   }
 });
 
-export const TeacherAttendanceHistorySchema = z.object({
+const TeacherAttendanceHistoryFields = {
   from: DateKeySchema.optional(),
   to: DateKeySchema.optional(),
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(30)
-});
+};
 
-export const TeacherAttendanceOverviewSchema = TeacherAttendanceHistorySchema.extend({
+export const TeacherAttendanceHistorySchema = z.object(TeacherAttendanceHistoryFields).superRefine(validateDateRange);
+
+export const TeacherAttendanceOverviewSchema = z.object({
+  ...TeacherAttendanceHistoryFields,
   status: z.enum(TEACHER_DAY_STATUSES).optional(),
-  teacherId: z.string().optional(),
-  classId: z.string().optional()
-});
+  teacherId: ObjectIdSchema.optional(),
+  classId: ObjectIdSchema.optional()
+}).superRefine(validateDateRange);
 
 export const TeacherAttendanceReportSchema = z.object({
   from: DateKeySchema,
   to: DateKeySchema,
-  teacherId: z.string().optional(),
-  classId: z.string().optional()
-});
+  teacherId: ObjectIdSchema.optional(),
+  classId: ObjectIdSchema.optional()
+}).superRefine(validateDateRange);
 
 export const CorrectTeacherAttendanceSchema = z.object({
   correctedToStatus: z.enum(["on_time", "late", "on_leave"]),

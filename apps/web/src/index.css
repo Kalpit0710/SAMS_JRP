@@ -564,6 +564,34 @@ input:focus {
   color: var(--text-primary);
 }
 
+.danger-btn {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.danger-btn:hover:not(:disabled) {
+  color: #fff;
+  background: var(--danger);
+  border-color: var(--danger);
+}
+
+.danger-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 /* Stat Grid */
 .stat-grid {
   display: grid;
@@ -1258,6 +1286,33 @@ input:focus {
 
 .leave-substitute-section .modal-footer-actions {
   justify-content: flex-start;
+}
+
+.leave-cover-current {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.75rem 0.9rem;
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+  border-radius: 0.55rem;
+}
+
+.leave-cover-current-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.leave-cover-current-info small {
+  color: var(--text-secondary);
+}
+
+.leave-cover-note {
+  font-style: italic;
 }
 
 .ta-policy-hint {
@@ -2683,6 +2738,10 @@ input:focus {
   padding: 1.25rem;
   width: 100%;
   max-width: 420px;
+  max-height: 90vh;
+  max-height: 90dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
@@ -3001,12 +3060,28 @@ input:focus {
   max-width: 640px;
   max-height: 90vh;
   max-height: 90dvh;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 18px;
   box-shadow: var(--shadow-md);
   padding: 1.5rem;
+}
+
+/* Keep the title and actions in place and scroll only the content between them. */
+.modal-card > .modal-header,
+.modal-card > .modal-footer {
+  flex: 0 0 auto;
+}
+
+.modal-card > .modal-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .modal-header {
@@ -4052,13 +4127,14 @@ input:focus {
 }
 
 /* Animations */
+/* Opacity only: any transform here would become the containing block for fixed-position modals. */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .fade-in {
-  animation: fadeIn 0.4s ease forwards;
+  animation: fadeIn 0.4s ease;
 }
 
 /* Responsive */

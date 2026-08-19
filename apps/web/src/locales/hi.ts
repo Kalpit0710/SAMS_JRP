@@ -450,6 +450,7 @@ const hi = {
     substituteHint: "स्थानापन्न शिक्षक को केवल स्वीकृत अवकाश की तिथियों पर इस कक्षा की पहुँच मिलेगी।",
     substituteSelect: "स्थानापन्न शिक्षक चुनें",
     substituteAssign: "स्थानापन्न नियुक्त करें",
+    substituteReplace: "स्थानापन्न बदलें",
     substituteRemove: "व्यवस्था हटाएँ",
     substituteAssigned: "स्थानापन्न शिक्षक नियुक्त हुआ।",
     substituteRemoved: "स्थानापन्न व्यवस्था हटा दी गई।",

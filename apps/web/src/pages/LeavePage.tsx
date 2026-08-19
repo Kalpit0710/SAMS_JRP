@@ -701,22 +701,7 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
                 </section>
               ) : null}
 
-              {role === "admin" && canRevoke(selected) ? (
-                <section className="modal-action-section leave-revoke-section">
-                  <h3 className="section-title">{t("leave.rejectApproved")}</h3>
-                  <form className="leave-decision-form" onSubmit={(event) => { event.preventDefault(); void revokeApproval(selected); }}>
-                    <div className="form-field">
-                      <label htmlFor="revoke-note">{t("leave.revokeNoteLabel")}<span className="req">*</span></label>
-                      <textarea id="revoke-note" value={revokeNote} onChange={(event) => setRevokeNote(event.target.value)} maxLength={1000} minLength={3} required placeholder={t("leave.revokeNotePlaceholder") || "Enter reason for rejection..."} />
-                    </div>
-                    <button className="primary-btn danger-text" disabled={saving || !revokeNote.trim()} type="submit">
-                      <X size={15} />{saving ? t("leave.saving") : t("leave.rejectApproved")}
-                    </button>
-                  </form>
-                </section>
-              ) : null}
-
-              {selected.substitute ? (
+              {selected.substitute && !(role === "admin" && canAssignSubstitute(selected)) ? (
                 <section className="modal-details-section">
                   <dl className="leave-detail-list">
                     <div className="leave-detail-item">
@@ -742,9 +727,21 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
                 <section className="modal-action-section leave-substitute-section">
                   <h3 className="section-title">{t("leave.substituteTitle")}</h3>
                   <p className="panel-subtitle">{t("leave.substituteHint")}</p>
+                  {selected.substitute ? (
+                    <div className="leave-cover-current">
+                      <div className="leave-cover-current-info">
+                        <strong>{selected.substitute.substituteTeacherName}</strong>
+                        <small>{selected.substitute.className} · {selected.substitute.fromDateLabel} - {selected.substitute.toDateLabel} ({selected.substitute.dates.length})</small>
+                        {selected.substitute.note ? <small className="leave-cover-note">{selected.substitute.note}</small> : null}
+                      </div>
+                      <button type="button" className="ghost-btn danger-text" disabled={saving} onClick={() => void removeSubstitute(selected)}>
+                        {t("leave.substituteRemove")}
+                      </button>
+                    </div>
+                  ) : null}
                   <form className="leave-decision-form" onSubmit={(event) => { event.preventDefault(); void assignSubstitute(selected); }}>
                     <div className="form-field">
-                      <label htmlFor="substitute-teacher">{t("leave.substitute")}</label>
+                      <label htmlFor="substitute-teacher">{selected.substitute ? t("leave.substituteReplace") : t("leave.substitute")}</label>
                       <select id="substitute-teacher" value={substituteTeacherId} onChange={(event) => setSubstituteTeacherId(event.target.value)}>
                         <option value="">{t("leave.substituteSelect")}</option>
                         {teachers
@@ -756,16 +753,24 @@ export default function LeavePage({ role, requestWithAuth }: { role: Role; reque
                       <label htmlFor="substitute-note">{t("leave.adminNoteOptional")}</label>
                       <textarea id="substitute-note" value={substituteNote} onChange={(event) => setSubstituteNote(event.target.value)} maxLength={1000} />
                     </div>
-                    <div className="modal-footer-actions">
-                      <button className="primary-btn" disabled={saving || !substituteTeacherId} type="submit">
-                        {saving ? t("leave.saving") : t("leave.substituteAssign")}
-                      </button>
-                      {selected.substitute ? (
-                        <button type="button" className="ghost-btn danger-text" disabled={saving} onClick={() => void removeSubstitute(selected)}>
-                          {t("leave.substituteRemove")}
-                        </button>
-                      ) : null}
+                    <button className="primary-btn" disabled={saving || !substituteTeacherId} type="submit">
+                      {saving ? t("leave.saving") : selected.substitute ? t("leave.substituteReplace") : t("leave.substituteAssign")}
+                    </button>
+                  </form>
+                </section>
+              ) : null}
+
+              {role === "admin" && canRevoke(selected) ? (
+                <section className="modal-action-section leave-revoke-section">
+                  <h3 className="section-title">{t("leave.rejectApproved")}</h3>
+                  <form className="leave-decision-form" onSubmit={(event) => { event.preventDefault(); void revokeApproval(selected); }}>
+                    <div className="form-field">
+                      <label htmlFor="revoke-note">{t("leave.revokeNoteLabel")}<span className="req">*</span></label>
+                      <textarea id="revoke-note" value={revokeNote} onChange={(event) => setRevokeNote(event.target.value)} maxLength={1000} minLength={3} required placeholder={t("leave.revokeNotePlaceholder") || "Enter reason for rejection..."} />
                     </div>
+                    <button className="danger-btn" disabled={saving || !revokeNote.trim()} type="submit">
+                      <X size={15} />{saving ? t("leave.saving") : t("leave.rejectApproved")}
+                    </button>
                   </form>
                 </section>
               ) : null}

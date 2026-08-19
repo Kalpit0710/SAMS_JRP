@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import request from "supertest";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { MongoMemoryServer } from "mongodb-memory-server";
+import { MongoMemoryReplSet } from "mongodb-memory-server";
 import { createApp } from "../../app.js";
 import { AuditLogModel } from "../../models/audit-log.model.js";
 import { ClassModel } from "../../models/class.model.js";
@@ -116,10 +116,10 @@ async function setupAdmin() {
 }
 
 describe("teacher self-attendance", () => {
-  let mongoServer: MongoMemoryServer;
+  let mongoServer: MongoMemoryReplSet;
 
   beforeAll(async () => {
-    mongoServer = await MongoMemoryServer.create();
+    mongoServer = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
     await mongoose.connect(mongoServer.getUri());
   }, 180000);
 
@@ -180,6 +180,27 @@ describe("teacher self-attendance", () => {
     expect(overview.status).toBe(403);
   }, 30000);
 
+  it("rejects invalid admin filters, impossible dates, and reversed ranges", async () => {
+    const { agent, accessToken } = await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+
+    const invalidFilter = await adminAgent
+      .get("/api/teacher-attendance/admin/overview?teacherId=not-an-object-id")
+      .set("Authorization", `Bearer ${adminToken}`);
+    expect(invalidFilter.status).toBe(400);
+
+    const impossibleDate = await agent
+      .post("/api/teacher-attendance/requests")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ attendanceDate: "2026-02-31", requestType: "manual", requestedStatus: "on_time", reason: "Invalid date" });
+    expect(impossibleDate.status).toBe(400);
+
+    const reversedRange = await adminAgent
+      .get(`/api/teacher-attendance/admin/report?from=${pastDateKey(1)}&to=${pastDateKey(7)}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    expect(reversedRange.status).toBe(400);
+  }, 30000);
+
   it("lets a teacher apply for a manual attendance request and an admin approve it into a real record", async () => {
     const { agent, accessToken, teacher } = await setupTeacher();
     await UserModel.create({
@@ -226,6 +247,27 @@ describe("teacher self-attendance", () => {
     expect(record!.status).toBe("on_time");
   }, 30000);
 
+  it("commits only one result when two admins approve the same manual request concurrently", async () => {
+    const { agent, accessToken, teacher } = await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+    const missedDate = pastDateKey(1);
+    const created = await agent
+      .post("/api/teacher-attendance/requests")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ attendanceDate: missedDate, requestType: "manual", requestedStatus: "late", reason: "Forgot to check in" });
+    expect(created.status).toBe(201);
+
+    const review = () => adminAgent
+      .patch(`/api/teacher-attendance/admin/requests/${created.body.item._id}/review`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ decision: "approved" });
+    const results = await Promise.all([review(), review()]);
+
+    expect(results.map((result) => result.status).sort()).toEqual([200, 409]);
+    expect(await TeacherAttendanceRecordModel.countDocuments({ teacherId: teacher._id, attendanceDate: missedDate })).toBe(1);
+    expect((await TeacherAttendanceRequestModel.findById(created.body.item._id))!.status).toBe("approved");
+  }, 30000);
+
   it("lets a teacher apply for a correction request and an admin reject it without changing the record", async () => {
     const { agent, accessToken, teacher } = await setupTeacher();
     await UserModel.create({
@@ -267,6 +309,32 @@ describe("teacher self-attendance", () => {
     const record = await TeacherAttendanceRecordModel.findOne({ teacherId: teacher._id, attendanceDate: schoolDateKey() });
     expect(record!.status).toBe("on_time");
     expect(record!.source).toBe("self");
+  }, 30000);
+
+  it("keeps a correction request pending when its attendance record no longer exists", async () => {
+    const { agent, accessToken } = await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+
+    const marked = await agent
+      .post("/api/teacher-attendance/mark")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ location: { lat: 28.6139, lng: 77.209, accuracyMeters: 10 } });
+    expect(marked.status).toBe(201);
+
+    const created = await agent
+      .post("/api/teacher-attendance/requests")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ attendanceDate: schoolDateKey(), requestType: "correction", requestedStatus: "late", reason: "Correct my status" });
+    expect(created.status).toBe(201);
+
+    await TeacherAttendanceRecordModel.findByIdAndDelete(marked.body.item._id);
+    const reviewed = await adminAgent
+      .patch(`/api/teacher-attendance/admin/requests/${created.body.item._id}/review`)
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ decision: "approved" });
+
+    expect(reviewed.status).toBe(409);
+    expect((await TeacherAttendanceRequestModel.findById(created.body.item._id))!.status).toBe("pending");
   }, 30000);
 
   it("excludes weekly offs and school holidays from the absence calculation", async () => {

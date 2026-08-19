@@ -72,6 +72,8 @@ function errorResponse(res: { status: (code: number) => { json: (body: unknown) 
   });
 }
 
+class AttendanceReviewConflict extends Error {}
+
 async function getTeacher(userId: string) {
   return TeacherModel.findOne({
     userId: new mongoose.Types.ObjectId(userId),
@@ -603,58 +605,79 @@ teacherAttendanceRouter.patch(
   asyncHandler(async (req, res) => {
     const parsed = ReviewAttendanceRequestSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: "Invalid review payload", errors: parsed.error.flatten() });
-    const request = await TeacherAttendanceRequestModel.findById(req.params.id);
-    if (!request) return res.status(404).json({ message: "Attendance request not found" });
-    if (request.status !== "pending") return res.status(409).json({ message: "Request has already been decided" });
-
     const adminUserId = new mongoose.Types.ObjectId(req.auth!.userId);
-    request.status = parsed.data.decision;
-    request.decisionNote = parsed.data.decisionNote;
-    request.decidedBy = adminUserId;
-    request.decidedAt = new Date();
-    await request.save();
+    const session = await mongoose.startSession();
+    const transactionResult: {
+      request?: Record<string, unknown>;
+      record?: Record<string, unknown>;
+    } = {};
 
-    let record;
-    if (parsed.data.decision === "approved") {
-      if (request.requestType === "correction" && request.existingRecordId) {
-        record = await TeacherAttendanceRecordModel.findById(request.existingRecordId);
-        if (record) {
-          if (!record.originalStatus) record.originalStatus = record.status;
-          record.status = "corrected";
-          record.correctedToStatus = request.requestedStatus;
-          record.correctionReason = request.reason;
-          record.source = "admin_correction";
-          record.updatedBy = adminUserId;
-          await record.save();
-        }
-      } else if (request.requestType === "manual") {
-        try {
-          record = await TeacherAttendanceRecordModel.create({
-            teacherId: request.teacherId,
-            attendanceDate: request.attendanceDate,
-            checkInAtServer: new Date(`${request.attendanceDate}T00:00:00`),
-            status: request.requestedStatus,
-            // The day was an absence until this request was approved.
-            originalStatus: "absent",
-            correctionReason: request.reason,
-            source: "manual_application",
-            createdBy: request.teacherUserId,
-            updatedBy: adminUserId
-          });
-        } catch (error) {
-          if ((error as { code?: number }).code === 11000) {
-            return res.status(409).json({ message: "Attendance was already marked for this date before approval" });
+    try {
+      await session.withTransaction(async () => {
+        const request = await TeacherAttendanceRequestModel.findOneAndUpdate(
+          { _id: req.params.id, status: "pending" },
+          {
+            $set: {
+              status: parsed.data.decision,
+              decisionNote: parsed.data.decisionNote,
+              decidedBy: adminUserId,
+              decidedAt: new Date()
+            }
+          },
+          { session, returnDocument: "after" }
+        );
+        if (!request) throw new AttendanceReviewConflict("Request was not found or has already been decided");
+
+        if (parsed.data.decision === "approved") {
+          if (request.requestType === "correction" && request.existingRecordId) {
+            const attendanceRecord = await TeacherAttendanceRecordModel.findById(request.existingRecordId).session(session);
+            if (!attendanceRecord) throw new AttendanceReviewConflict("The attendance record no longer exists; the request was not approved");
+            if (!attendanceRecord.originalStatus) attendanceRecord.originalStatus = attendanceRecord.status;
+            attendanceRecord.status = "corrected";
+            attendanceRecord.correctedToStatus = request.requestedStatus;
+            attendanceRecord.correctionReason = request.reason;
+            attendanceRecord.source = "admin_correction";
+            attendanceRecord.updatedBy = adminUserId;
+            await attendanceRecord.save({ session });
+            transactionResult.record = attendanceRecord.toObject() as unknown as Record<string, unknown>;
+          } else if (request.requestType === "manual") {
+            const [attendanceRecord] = await TeacherAttendanceRecordModel.create([{
+              teacherId: request.teacherId,
+              attendanceDate: request.attendanceDate,
+              checkInAtServer: new Date(),
+              status: request.requestedStatus,
+              // The day was an absence until this request was approved.
+              originalStatus: "absent",
+              correctionReason: request.reason,
+              source: "manual_application",
+              createdBy: adminUserId,
+              updatedBy: adminUserId
+            }], { session });
+            transactionResult.record = attendanceRecord.toObject() as unknown as Record<string, unknown>;
           }
-          throw error;
         }
+
+        transactionResult.request = request.toObject() as unknown as Record<string, unknown>;
+      });
+    } catch (error) {
+      if (error instanceof AttendanceReviewConflict) {
+        return res.status(409).json({ message: error.message });
       }
+      if ((error as { code?: number }).code === 11000) {
+        return res.status(409).json({ message: "Attendance was already marked for this date before approval" });
+      }
+      throw error;
+    } finally {
+      await session.endSession();
     }
+
+    if (!transactionResult.request) throw new Error("Attendance request review did not complete");
 
     setAuditMeta(res, {
       action: "TEACHER_ATTENDANCE_REQUEST_REVIEW",
       resource: "teacher-attendance/request",
-      metadata: { requestId: request.id, decision: parsed.data.decision, requestType: request.requestType }
+      metadata: { requestId: String(transactionResult.request._id), decision: parsed.data.decision, requestType: transactionResult.request.requestType }
     });
-    return res.json({ item: request, record });
+    return res.json({ item: transactionResult.request, record: transactionResult.record });
   })
 );

@@ -107,18 +107,20 @@ type ViewMode = "calendar" | "tile" | "list";
 type TabKey = "self" | "view" | "summary" | "requests" | "settings" | "leave";
 
 const VIEW_MODE_KEY = "sams_teacher_attendance_view_mode";
+const DEFAULT_TIMEZONE = "Asia/Kolkata";
+const MAX_REUSABLE_LOCATION_AGE_MS = 60_000;
 
-function todayKey() {
+function todayKey(timezone = DEFAULT_TIMEZONE) {
   return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Kolkata",
+    timeZone: timezone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit"
   }).format(new Date());
 }
 
-function currentMonthKey() {
-  return todayKey().slice(0, 7);
+function currentMonthKey(timezone = DEFAULT_TIMEZONE) {
+  return todayKey(timezone).slice(0, 7);
 }
 
 function formatDate(value: string) {
@@ -129,9 +131,9 @@ function formatMonthLabel(monthKey: string) {
   return new Date(`${monthKey}-01T00:00:00`).toLocaleDateString(undefined, { month: "long", year: "numeric" });
 }
 
-function formatTime(value?: string) {
+function formatTime(value?: string, timezone = DEFAULT_TIMEZONE) {
   if (!value) return "—";
-  return new Date(value).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return new Date(value).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: timezone });
 }
 
 function statusTone(status: string) {
@@ -246,10 +248,17 @@ export default function TeacherAttendancePage({
   const [reviewModal, setReviewModal] = useState<{ requestId: string; teacherName: string; date: string } | null>(null);
   const [decisionNoteValue, setDecisionNoteValue] = useState("");
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [correctionModal, setCorrectionModal] = useState<{ recordId: string; teacherName: string; date: string } | null>(null);
+  const [correctedStatus, setCorrectedStatus] = useState<"on_time" | "late" | "on_leave">("on_time");
+  const [correctionReason, setCorrectionReason] = useState("");
+  const [correctionSaving, setCorrectionSaving] = useState(false);
   const [conflictModal, setConflictModal] = useState<{ recordId: string; teacherName: string; date: string } | null>(null);
   const [conflictResolution, setConflictResolution] = useState<"keep_attendance" | "apply_leave">("keep_attendance");
   const [conflictNote, setConflictNote] = useState("");
   const [conflictSaving, setConflictSaving] = useState(false);
+  const timezone = settings?.timezone || DEFAULT_TIMEZONE;
+  const schoolToday = todayKey(timezone);
+  const currentSchoolMonth = currentMonthKey(timezone);
 
   const changeViewMode = (mode: ViewMode) => {
     setViewMode(mode);
@@ -265,6 +274,12 @@ export default function TeacherAttendancePage({
     });
   }, [isAdmin]);
 
+  useEffect(() => {
+    if (!settings?.timezone) return;
+    const defaultMonth = currentMonthKey();
+    setViewMonth((current) => current === defaultMonth ? currentMonthKey(settings.timezone) : current);
+  }, [settings?.timezone]);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -274,23 +289,27 @@ export default function TeacherAttendancePage({
         const params = new URLSearchParams({ from, to });
         if (filterClassId) params.set("classId", filterClassId);
         if (filterTeacherId) params.set("teacherId", filterTeacherId);
-        const [result, policy, pending] = await Promise.all([
+        const [result, policy, pending] = await Promise.allSettled([
           requestWithAuth<{ rows: OverviewRow[] }>(`/teacher-attendance/admin/overview?${params.toString()}`, { method: "GET" }),
           requestWithAuth<Settings>("/teacher-attendance/settings", { method: "GET" }),
           requestWithAuth<{ items: AttendanceRequestItem[] }>("/teacher-attendance/admin/requests?pageSize=100", { method: "GET" })
         ]);
-        setOverview(result.rows);
-        setSettings(policy);
-        setAdminRequests(pending.items);
+        if (result.status === "fulfilled") setOverview(result.value.rows);
+        if (policy.status === "fulfilled") setSettings(policy.value);
+        if (pending.status === "fulfilled") setAdminRequests(pending.value.items);
+        const rejected = [result, policy, pending].find((item) => item.status === "rejected");
+        if (rejected?.status === "rejected") throw rejected.reason;
       } else {
-        const [result, days, myPending] = await Promise.all([
+        const [result, days, myPending] = await Promise.allSettled([
           requestWithAuth<{ items: AttendanceRecord[] }>(`/teacher-attendance/me?from=${from}&to=${to}&pageSize=100`, { method: "GET" }),
           requestWithAuth<{ rows: OverviewRow[] }>(`/teacher-attendance/me/days?from=${from}&to=${to}`, { method: "GET" }),
           requestWithAuth<{ items: AttendanceRequestItem[] }>("/teacher-attendance/requests/me?pageSize=100", { method: "GET" })
         ]);
-        setRecords(result.items);
-        setMyDays(days.rows);
-        setMyRequests(myPending.items);
+        if (result.status === "fulfilled") setRecords(result.value.items);
+        if (days.status === "fulfilled") setMyDays(days.value.rows);
+        if (myPending.status === "fulfilled") setMyRequests(myPending.value.items);
+        const rejected = [result, days, myPending].find((item) => item.status === "rejected");
+        if (rejected?.status === "rejected") throw rejected.reason;
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : t("teacherAttendance.loadFailed"));
@@ -307,21 +326,27 @@ export default function TeacherAttendancePage({
 
   useEffect(() => {
     if (!isAdmin) return;
-    void requestWithAuth<{ items: ClassItem[] }>("/master-data/classes?active=true&pageSize=200", { method: "GET" }).then((res) => setClasses(res.items)).catch(() => undefined);
-    void requestWithAuth<{ items: TeacherItem[] }>("/master-data/teachers?pageSize=200", { method: "GET" }).then((res) => setTeachers(res.items)).catch(() => undefined);
-  }, [isAdmin, requestWithAuth]);
-
-  const isCheckedInToday = records.some((record) => record.attendanceDate === todayKey());
+    const showLoadError = (loadError: unknown) => setError(loadError instanceof Error ? loadError.message : t("teacherAttendance.loadFailed"));
+    void requestWithAuth<{ items: ClassItem[] }>("/master-data/classes?active=true&pageSize=200", { method: "GET" }).then((res) => setClasses(res.items)).catch(showLoadError);
+    void requestWithAuth<{ items: TeacherItem[] }>("/master-data/teachers?pageSize=200", { method: "GET" }).then((res) => setTeachers(res.items)).catch(showLoadError);
+  }, [isAdmin, requestWithAuth, t]);
 
   useEffect(() => {
-    if (isAdmin || loading || hasStartedAutoCapture) return;
-    if (!settings) return;
-    if (isCheckedInToday) return;
-    setHasStartedAutoCapture(true);
-    void captureLocation(settings).catch(() => undefined);
-  }, [isAdmin, loading, settings, hasStartedAutoCapture, isCheckedInToday]);
+    if (!requestModal && !conflictModal && !reviewModal && !correctionModal) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setRequestModal(null);
+      setConflictModal(null);
+      setReviewModal(null);
+      setCorrectionModal(null);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [requestModal, conflictModal, reviewModal, correctionModal]);
 
-  const captureLocation = async (currentSettings = settings) => {
+  const isCheckedInToday = records.some((record) => record.attendanceDate === schoolToday);
+
+  const captureLocation = useCallback(async (currentSettings = settings) => {
     setError(null);
     try {
       setLocationStatus("capturing");
@@ -365,14 +390,28 @@ export default function TeacherAttendancePage({
       );
       throw locationError;
     }
-  };
+  }, [settings, t]);
+
+  useEffect(() => {
+    if (isAdmin || loading || hasStartedAutoCapture) return;
+    if (!settings) return;
+    if (isCheckedInToday) return;
+    setHasStartedAutoCapture(true);
+    void captureLocation(settings).catch(() => undefined);
+  }, [isAdmin, loading, settings, hasStartedAutoCapture, isCheckedInToday, captureLocation]);
 
   const markAttendance = async () => {
     setSaving(true);
     setError(null);
     setNotice(null);
+    let locationReady = false;
     try {
-      const position = capturedLocation ?? await captureLocation(settings);
+      const locationAge = capturedLocation ? Date.now() - capturedLocation.timestamp : Number.POSITIVE_INFINITY;
+      const reusableLocation = capturedLocation && locationAge >= 0 && locationAge <= MAX_REUSABLE_LOCATION_AGE_MS
+        ? capturedLocation
+        : null;
+      const position = reusableLocation ?? await captureLocation(settings);
+      locationReady = true;
       await requestWithAuth("/teacher-attendance/mark", {
         method: "POST",
         body: JSON.stringify({
@@ -387,13 +426,10 @@ export default function TeacherAttendancePage({
       setNotice(t("teacherAttendance.markedSuccess"));
       await load();
     } catch (markError) {
-      const geoFailure = geolocationErrorCode(markError) !== null;
-      if (geoFailure) {
+      if (!locationReady) {
         // captureLocation already set status, denied flag, and a specific message.
         return;
       }
-      setLocationStatus("idle");
-      setCapturedLocation(null);
       const message = markError instanceof Error ? markError.message : t("teacherAttendance.markFailed");
       setError(message);
     } finally {
@@ -423,17 +459,27 @@ export default function TeacherAttendancePage({
     }
   };
 
-  const correct = async (recordId: string) => {
-    const correctionReason = window.prompt(t("teacherAttendance.correctionReason"));
-    if (!correctionReason?.trim()) return;
+  const openCorrectionModal = (recordId: string, teacherName: string, date: string) => {
+    setCorrectionModal({ recordId, teacherName, date });
+    setCorrectedStatus("on_time");
+    setCorrectionReason("");
+  };
+
+  const submitCorrectionModal = async () => {
+    if (!correctionModal || correctionReason.trim().length < 3) return;
+    setCorrectionSaving(true);
+    setError(null);
     try {
-      await requestWithAuth(`/teacher-attendance/admin/${recordId}/correct`, {
+      await requestWithAuth(`/teacher-attendance/admin/${correctionModal.recordId}/correct`, {
         method: "PATCH",
-        body: JSON.stringify({ correctedToStatus: "on_time", correctionReason })
+        body: JSON.stringify({ correctedToStatus: correctedStatus, correctionReason: correctionReason.trim() })
       });
+      setCorrectionModal(null);
       await load();
     } catch (correctionError) {
       setError(correctionError instanceof Error ? correctionError.message : t("teacherAttendance.correctionFailed"));
+    } finally {
+      setCorrectionSaving(false);
     }
   };
 
@@ -469,7 +515,7 @@ export default function TeacherAttendancePage({
   };
 
   const submitConflictModal = async () => {
-    if (!conflictModal || !conflictNote.trim()) return;
+    if (!conflictModal || conflictNote.trim().length < 3) return;
     setConflictSaving(true);
     setError(null);
     try {
@@ -488,7 +534,7 @@ export default function TeacherAttendancePage({
   };
 
   const submitRequestModal = async () => {
-    if (!requestModal || !requestReason.trim()) return;
+    if (!requestModal || requestReason.trim().length < 3) return;
     setRequestSaving(true);
     setError(null);
     try {
@@ -547,7 +593,7 @@ export default function TeacherAttendancePage({
   // Manually approved days carry a synthetic midnight timestamp, so never show it as a check-in time.
   const recordDetail = (record: AttendanceRecord) => (record.source === "manual_application"
     ? t("teacherAttendance.addedAfterApproval")
-    : `${t("teacherAttendance.checkIn")}: ${formatTime(record.checkInAtServer)}`);
+    : `${t("teacherAttendance.checkIn")}: ${formatTime(record.checkInAtServer, timezone)}`);
   const overviewByDate = useMemo(() => new Map(overview.map((row) => [row.attendanceDate, row])), [overview]);
   const overviewByDateGroup = useMemo(() => {
     const map = new Map<string, OverviewRow[]>();
@@ -562,7 +608,7 @@ export default function TeacherAttendancePage({
   const pendingAdminRequests = useMemo(() => adminRequests.filter((request) => request.status === "pending"), [adminRequests]);
   const decidedAdminRequests = useMemo(() => adminRequests.filter((request) => request.status !== "pending"), [adminRequests]);
 
-  const elapsedDaysInMonth = viewMonth === currentMonthKey() ? Number(todayKey().slice(-2)) : monthBounds(viewMonth).daysInMonth;
+  const elapsedDaysInMonth = viewMonth === currentSchoolMonth ? Number(schoolToday.slice(-2)) : monthBounds(viewMonth).daysInMonth;
   void elapsedDaysInMonth;
 
   const teacherSummary = useMemo(() => {
@@ -615,7 +661,7 @@ export default function TeacherAttendancePage({
     { key: "leave", label: t("teacherAttendance.tabLeave"), icon: <History size={16} aria-hidden="true" /> }
   ];
 
-  const todayRecord = records.find((record) => record.attendanceDate === todayKey());
+  const todayRecord = records.find((record) => record.attendanceDate === schoolToday);
   const attendanceDisabled = settings?.enabled === false;
 
   return (
@@ -626,7 +672,7 @@ export default function TeacherAttendancePage({
           <h2>{isAdmin ? t("teacherAttendance.adminTitle") : t("teacherAttendance.title")}</h2>
           <p>{isAdmin ? t("teacherAttendance.adminHint") : t("teacherAttendance.hint")}</p>
         </div>
-        <span className="ta-date-chip"><CalendarDays size={14} aria-hidden="true" />{formatDate(todayKey())}</span>
+        <span className="ta-date-chip"><CalendarDays size={14} aria-hidden="true" />{formatDate(schoolToday)}</span>
       </header>
 
       <div className="ta-tabs" role="tablist">
@@ -663,7 +709,7 @@ export default function TeacherAttendancePage({
           {todayRecord ? (
             <div className="ta-done-state">
               <span className="ta-done-icon" aria-hidden="true"><CheckCircle2 size={30} /></span>
-              <strong>{t("teacherAttendance.checkedInAt", { time: formatTime(todayRecord.checkInAtServer) })}</strong>
+              <strong>{t("teacherAttendance.checkedInAt", { time: formatTime(todayRecord.checkInAtServer, timezone) })}</strong>
               <small><MapPin size={13} aria-hidden="true" /> {Math.round(todayRecord.distanceMeters ?? 0)} m</small>
             </div>
           ) : attendanceDisabled ? (
@@ -821,7 +867,7 @@ export default function TeacherAttendancePage({
             <div className="ta-month-nav">
               <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, -1))}><ChevronLeft size={16} aria-hidden="true" /></button>
               <strong>{formatMonthLabel(viewMonth)}</strong>
-              <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentMonthKey()}><ChevronRight size={16} aria-hidden="true" /></button>
+              <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentSchoolMonth}><ChevronRight size={16} aria-hidden="true" /></button>
             </div>
 
             {!isAdmin && viewMode === "calendar" ? (
@@ -831,14 +877,14 @@ export default function TeacherAttendancePage({
                   if (!date) return <span className="ta-calendar-cell empty" key={`empty-${index}`} />;
                   const day = myDaysByDate.get(date);
                   const record = recordsByDate.get(date);
-                  const isFuture = date > todayKey();
+                  const isFuture = date > schoolToday;
                   const tone = day ? statusTone(day.status) : "";
                   const canAct = Boolean(day?.correctionAvailable);
                   return (
                     <button
                       type="button"
                       key={date}
-                      className={`ta-calendar-cell ${tone} ${day && !day.isWorkingDay ? "non-working" : ""} ${date === todayKey() ? "is-today" : ""}`}
+                      className={`ta-calendar-cell ${tone} ${day && !day.isWorkingDay ? "non-working" : ""} ${date === schoolToday ? "is-today" : ""}`}
                       disabled={isFuture || !canAct}
                       onClick={() => {
                         if (!canAct) return;
@@ -862,18 +908,18 @@ export default function TeacherAttendancePage({
                   {buildCalendarCells(viewMonth).map((date, index) => {
                     if (!date) return <span className="ta-calendar-cell empty" key={`empty-${index}`} />;
                     const row = overviewByDate.get(date);
-                    const isFuture = date > todayKey();
+                    const isFuture = date > schoolToday;
                     const tone = row ? statusTone(row.status) : "";
                     return (
                       <button
                         type="button"
                         key={date}
-                        className={`ta-calendar-cell ${tone} ${row && !row.isWorkingDay ? "non-working" : ""} ${date === todayKey() ? "is-today" : ""}`}
+                        className={`ta-calendar-cell ${tone} ${row && !row.isWorkingDay ? "non-working" : ""} ${date === schoolToday ? "is-today" : ""}`}
                         disabled={isFuture || !row?.record}
                         onClick={() => {
                           if (!row?.record) return;
                           if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, date);
-                          else void correct(row.record._id);
+                          else openCorrectionModal(row.record._id, row.teacherName, date);
                         }}
                         title={row ? row.holidayName ?? t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status }) : undefined}
                       >
@@ -903,7 +949,7 @@ export default function TeacherAttendancePage({
                           className="ta-btn ghost small"
                           onClick={() => row.hasConflict
                             ? openConflictModal(row.record!._id, row.teacherName, row.attendanceDate)
-                            : void correct(row.record!._id)}
+                            : openCorrectionModal(row.record!._id, row.teacherName, row.attendanceDate)}
                         >
                           {row.hasConflict ? t("teacherAttendance.resolveConflict") : t("teacherAttendance.correct")}
                         </button>
@@ -928,7 +974,7 @@ export default function TeacherAttendancePage({
                                   onClick={() => {
                                     if (!row.record) return;
                                     if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, row.attendanceDate);
-                                    else void correct(row.record._id);
+                                    else openCorrectionModal(row.record._id, row.teacherName, row.attendanceDate);
                                   }}
                                   title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}`}
                                 >
@@ -941,7 +987,7 @@ export default function TeacherAttendancePage({
                       </div>
                     );
                   })
-                ) : myDays.filter((row) => row.attendanceDate <= todayKey()).map((row) => {
+                ) : myDays.filter((row) => row.attendanceDate <= schoolToday).map((row) => {
                   const record = recordsByDate.get(row.attendanceDate);
                   return (
                     <div className="ta-tile" key={row.attendanceDate}>
@@ -983,7 +1029,7 @@ export default function TeacherAttendancePage({
                               className="ta-btn ghost small"
                               onClick={() => row.hasConflict
                                 ? openConflictModal(row.record!._id, row.teacherName, row.attendanceDate)
-                                : void correct(row.record!._id)}
+                                : openCorrectionModal(row.record!._id, row.teacherName, row.attendanceDate)}
                             >
                               {row.hasConflict ? t("teacherAttendance.resolveConflict") : t("teacherAttendance.correct")}
                             </button>
@@ -1019,7 +1065,7 @@ export default function TeacherAttendancePage({
                                   onClick={() => {
                                     if (!row.record) return;
                                     if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, row.attendanceDate);
-                                    else void correct(row.record._id);
+                                    else openCorrectionModal(row.record._id, row.teacherName, row.attendanceDate);
                                   }}
                                   title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}`}
                                 >
@@ -1037,14 +1083,14 @@ export default function TeacherAttendancePage({
                 <div className="ta-empty"><History size={26} aria-hidden="true" /><p>{t("teacherAttendance.noRecords")}</p></div>
               ) : (
                 <ul className="ta-row-list">
-                  {myDays.filter((row) => row.attendanceDate <= todayKey()).map((row) => {
+                  {myDays.filter((row) => row.attendanceDate <= schoolToday).map((row) => {
                     const record = recordsByDate.get(row.attendanceDate);
                     return (
-                      <li className={`ta-row ${row.attendanceDate === todayKey() ? "is-today" : ""}`} key={row.attendanceDate}>
+                      <li className={`ta-row ${row.attendanceDate === schoolToday ? "is-today" : ""}`} key={row.attendanceDate}>
                         <div className="ta-row-main">
                           <span className="ta-avatar date" aria-hidden="true"><CalendarDays size={16} /></span>
                           <div className="ta-row-text">
-                            <strong className="ta-row-title"><span className="ta-row-date">{formatDate(row.attendanceDate)}</span>{row.attendanceDate === todayKey() ? <span className="ta-today-tag">{t("teacherAttendance.todayTag")}</span> : null}</strong>
+                            <strong className="ta-row-title"><span className="ta-row-date">{formatDate(row.attendanceDate)}</span>{row.attendanceDate === schoolToday ? <span className="ta-today-tag">{t("teacherAttendance.todayTag")}</span> : null}</strong>
                             <small>{row.holidayName ?? (record ? recordDetail(record) : t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status }))}</small>
                           </div>
                         </div>
@@ -1106,7 +1152,7 @@ export default function TeacherAttendancePage({
                 <div className="ta-month-nav">
                   <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, -1))}><ChevronLeft size={16} aria-hidden="true" /></button>
                   <strong>{formatMonthLabel(viewMonth)}</strong>
-                  <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentMonthKey()}><ChevronRight size={16} aria-hidden="true" /></button>
+                  <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentSchoolMonth}><ChevronRight size={16} aria-hidden="true" /></button>
                 </div>
               </div>
             </div>
@@ -1158,7 +1204,7 @@ export default function TeacherAttendancePage({
             <div className="ta-month-nav">
               <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, -1))}><ChevronLeft size={16} aria-hidden="true" /></button>
               <strong>{formatMonthLabel(viewMonth)}</strong>
-              <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentMonthKey()}><ChevronRight size={16} aria-hidden="true" /></button>
+              <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentSchoolMonth}><ChevronRight size={16} aria-hidden="true" /></button>
             </div>
 
             <div className="ta-summary-hero">
@@ -1318,8 +1364,35 @@ export default function TeacherAttendancePage({
               <textarea rows={3} value={requestReason} onChange={(event) => setRequestReason(event.target.value)} placeholder={t("teacherAttendance.requestReasonPlaceholder") ?? ""} />
             </label>
             <div className="ta-card-actions">
-              <button type="button" className="ta-btn primary" disabled={requestSaving || !requestReason.trim()} onClick={() => void submitRequestModal()}>
+              <button type="button" className="ta-btn primary" disabled={requestSaving || requestReason.trim().length < 3} onClick={() => void submitRequestModal()}>
                 {requestSaving ? t("teacherAttendance.saving") : t("teacherAttendance.submitRequest")}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {correctionModal ? (
+        <div className="ta-modal-overlay" role="dialog" aria-modal="true" onClick={() => setCorrectionModal(null)}>
+          <div className="ta-modal" onClick={(event) => event.stopPropagation()}>
+            <div className="ta-modal-header">
+              <h3>{t("teacherAttendance.correct")}</h3>
+              <button type="button" className="ta-btn ghost small" aria-label={t("common.close")} onClick={() => setCorrectionModal(null)}><X size={16} aria-hidden="true" /></button>
+            </div>
+            <p className="ta-modal-date">{correctionModal.teacherName} · {formatDate(correctionModal.date)}</p>
+            <label className="ta-field">{t("teacherAttendance.requestedStatus")}
+              <select autoFocus value={correctedStatus} onChange={(event) => setCorrectedStatus(event.target.value as typeof correctedStatus)}>
+                <option value="on_time">{t("teacherAttendance.status.on_time")}</option>
+                <option value="late">{t("teacherAttendance.status.late")}</option>
+                <option value="on_leave">{t("teacherAttendance.status.on_leave")}</option>
+              </select>
+            </label>
+            <label className="ta-field">{t("teacherAttendance.correctionReason")}
+              <textarea rows={3} value={correctionReason} onChange={(event) => setCorrectionReason(event.target.value)} />
+            </label>
+            <div className="ta-card-actions">
+              <button type="button" className="ta-btn primary" disabled={correctionSaving || correctionReason.trim().length < 3} onClick={() => void submitCorrectionModal()}>
+                {correctionSaving ? t("teacherAttendance.saving") : t("teacherAttendance.correct")}
               </button>
             </div>
           </div>
@@ -1345,7 +1418,7 @@ export default function TeacherAttendancePage({
               <textarea rows={3} value={conflictNote} onChange={(event) => setConflictNote(event.target.value)} />
             </label>
             <div className="ta-card-actions">
-              <button type="button" className="ta-btn primary" disabled={conflictSaving || !conflictNote.trim()} onClick={() => void submitConflictModal()}>
+              <button type="button" className="ta-btn primary" disabled={conflictSaving || conflictNote.trim().length < 3} onClick={() => void submitConflictModal()}>
                 {conflictSaving ? t("teacherAttendance.saving") : t("teacherAttendance.resolveConflict")}
               </button>
             </div>

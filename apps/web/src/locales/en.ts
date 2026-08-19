@@ -450,6 +450,7 @@ const en = {
     substituteHint: "The substitute gets access to this class only on the approved leave dates.",
     substituteSelect: "Select a substitute teacher",
     substituteAssign: "Assign substitute",
+    substituteReplace: "Replace substitute",
     substituteRemove: "Remove cover",
     substituteAssigned: "Substitute assigned.",
     substituteRemoved: "Substitute cover removed.",
