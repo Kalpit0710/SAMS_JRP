@@ -14,6 +14,17 @@ import { MongoMemoryServer } from "mongodb-memory-server";
 
 const app = createApp();
 
+function mostRecentSunday(): string {
+  const date = new Date();
+  date.setHours(0, 0, 0, 0);
+
+  while (date.getDay() !== 0) {
+    date.setDate(date.getDate() - 1);
+  }
+
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 async function clearDatabase() {
   await Promise.all([
     UserModel.deleteMany({}),
@@ -130,6 +141,39 @@ describe("notifications and data transfer", () => {
 
     expect(summary.body.summary.sent).toBe(1);
     expect(summary.body.summary.pending).toBe(0);
+  });
+
+  it("blocks attendance submission on Sundays", async () => {
+    await UserModel.create({
+      fullName: "Sunday Admin",
+      username: "sunday.admin",
+      passwordHash: await hashPassword("Admin@12345"),
+      roles: ["admin"],
+      isActive: true
+    });
+
+    const classDoc = await ClassModel.create({ name: "Class Sunday" });
+    const student = await StudentModel.create({
+      regNo: "REG-S1",
+      fullName: "Sunday Student",
+      classId: classDoc._id,
+      status: "active"
+    });
+
+    const { agent, accessToken } = await loginAs("sunday.admin", "Admin@12345");
+
+    const submit = await agent
+      .post("/api/attendance/submit")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({
+        classId: String(classDoc._id),
+        attendanceDate: mostRecentSunday(),
+        entries: [{ studentId: String(student._id), status: "present" }]
+      });
+
+    expect(submit.status).toBe(400);
+    expect(submit.body.message).toBe("Sunday is a holiday; attendance cannot be recorded");
+    expect(await AttendanceModel.countDocuments({})).toBe(0);
   });
 
   it("validates, imports and exports students via CSV", async () => {

@@ -19,6 +19,7 @@ const ATTENDANCE_STATUSES = [
   "late",
   "half_day"
 ] as const;
+const LOCAL_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 type AttendanceStatusKey = (typeof ATTENDANCE_STATUSES)[number];
 type StatusCounts = Record<AttendanceStatusKey, number>;
@@ -35,6 +36,21 @@ type SchoolAbsenceRow = {
   _id: mongoose.Types.ObjectId;
   classId: mongoose.Types.ObjectId;
   absenceCount: number;
+};
+
+type ClassDayRow = {
+  _id: mongoose.Types.ObjectId;
+  totalClasses: number;
+};
+
+type StudentPresentRow = {
+  _id: mongoose.Types.ObjectId;
+  presentCount: number;
+};
+
+type StudentHistoryRow = {
+  attendanceDate: Date;
+  status: AttendanceStatusKey;
 };
 
 function emptyStatusCounts(): StatusCounts {
@@ -99,6 +115,28 @@ function parsePage(query: Record<string, unknown>) {
   const pageSize = Number.isFinite(pageSizeRaw) ? Math.min(100, Math.max(1, Math.floor(pageSizeRaw))) : 20;
 
   return { page, pageSize };
+}
+
+function parseDateRange(query: Record<string, unknown>) {
+  const fromRaw = typeof query.fromDate === "string" ? query.fromDate : undefined;
+  const toRaw = typeof query.toDate === "string" ? query.toDate : undefined;
+
+  const fromDate = fromRaw ? normalizeDate(new Date(fromRaw)) : undefined;
+  const toDate = toRaw ? normalizeDate(new Date(toRaw)) : undefined;
+
+  if (fromDate && Number.isNaN(fromDate.getTime())) {
+    throw new Error("Invalid fromDate");
+  }
+
+  if (toDate && Number.isNaN(toDate.getTime())) {
+    throw new Error("Invalid toDate");
+  }
+
+  if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+    throw new Error("fromDate must be on or before toDate");
+  }
+
+  return { fromDate, toDate };
 }
 
 async function resolveTeacherClassFilter(userId: string): Promise<mongoose.Types.ObjectId[]> {
@@ -168,6 +206,219 @@ function buildAttendanceMatch(scope: { classId?: mongoose.Types.ObjectId; teache
 
   return attendanceMatch;
 }
+
+reportingRouter.get(
+  "/class-view",
+  requireRoles(["admin", "teacher"]),
+  asyncHandler(async (req, res) => {
+    const query = req.query as Record<string, unknown>;
+    const { page, pageSize } = parsePage(query);
+
+    let scope;
+    let fromDate: Date | undefined;
+    let toDate: Date | undefined;
+    try {
+      scope = await resolveReportScope({ auth: req.auth, query });
+      ({ fromDate, toDate } = parseDateRange(query));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid query";
+      const status = message.includes("assigned") ? 403 : 400;
+      return res.status(status).json({ message });
+    }
+
+    if (scope.teacherClassIds && scope.teacherClassIds.length === 0) {
+      return res.status(200).json({
+        generatedAt: new Date().toISOString(),
+        sundayHoliday: true,
+        items: []
+      });
+    }
+
+    const { students, studentIds } = await loadActiveStudents(scope);
+    const classFilter = scope.teacherClassIds ? { _id: { $in: scope.teacherClassIds } } : {};
+    const classes = await ClassModel.find(classFilter).select("_id name");
+    const attendanceMatch = buildAttendanceMatch(scope, fromDate, toDate);
+
+    const [classDayRows, presentRows] = await Promise.all([
+      AttendanceModel.aggregate<ClassDayRow>([
+        { $match: attendanceMatch },
+        { $addFields: { dayOfWeek: { $dayOfWeek: { date: "$attendanceDate", timezone: LOCAL_TIMEZONE } } } },
+        { $match: { dayOfWeek: { $ne: 1 } } },
+        { $group: { _id: { classId: "$classId", attendanceDate: "$attendanceDate" } } },
+        { $group: { _id: "$_id.classId", totalClasses: { $sum: 1 } } }
+      ]),
+      studentIds.length === 0
+        ? Promise.resolve([] as StudentPresentRow[])
+        : AttendanceModel.aggregate<StudentPresentRow>([
+            { $match: attendanceMatch },
+            { $addFields: { dayOfWeek: { $dayOfWeek: { date: "$attendanceDate", timezone: LOCAL_TIMEZONE } } } },
+            { $match: { dayOfWeek: { $ne: 1 } } },
+            { $unwind: "$entries" },
+            {
+              $match: {
+                "entries.studentId": { $in: studentIds },
+                "entries.status": { $in: PRESENT_LIKE_STATUSES }
+              }
+            },
+            { $group: { _id: "$entries.studentId", presentCount: { $sum: 1 } } }
+          ])
+    ]);
+
+    const classMap = new Map(classes.map((item) => [item._id.toString(), item]));
+    const totalClassesByClass = new Map(classDayRows.map((row) => [row._id.toString(), row.totalClasses]));
+    const presentCountByStudent = new Map(presentRows.map((row) => [row._id.toString(), row.presentCount]));
+
+    const items = students
+      .map((student) => {
+        const totalClasses = totalClassesByClass.get(student.classId.toString()) ?? 0;
+        const presentCount = presentCountByStudent.get(student._id.toString()) ?? 0;
+        const classInfo = classMap.get(student.classId.toString());
+
+        return {
+          studentId: student._id.toString(),
+          studentName: student.fullName,
+          rollNumber: student.rollNumber,
+          classId: student.classId.toString(),
+          className: classInfo?.name ?? "Unknown Class",
+          presentCount,
+          totalClasses,
+          attendanceRate: totalClasses === 0 ? 0 : Number(((presentCount / totalClasses) * 100).toFixed(1))
+        };
+      })
+      .sort((a, b) =>
+        a.className.localeCompare(b.className)
+        || (a.rollNumber ?? "").localeCompare(b.rollNumber ?? "", undefined, { numeric: true, sensitivity: "base" })
+        || a.studentName.localeCompare(b.studentName)
+      );
+
+    const total = items.length;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    const currentPage = Math.min(page, totalPages);
+    const pagedItems = items.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+    setAuditMeta(res, {
+      action: "REPORT_CLASS_VIEW_VIEW",
+      resource: "reports",
+      metadata: {
+        classId: scope.classId?.toString(),
+        fromDate: fromDate ? toDateKey(fromDate) : null,
+        toDate: toDate ? toDateKey(toDate) : null,
+        studentCount: total,
+        page: currentPage,
+        pageSize,
+        sundayHoliday: true
+      }
+    });
+
+    return res.status(200).json({
+      generatedAt: new Date().toISOString(),
+      sundayHoliday: true,
+      page: currentPage,
+      pageSize,
+      total,
+      totalPages,
+      items: pagedItems
+    });
+  })
+);
+
+reportingRouter.get(
+  "/student-history/:studentId",
+  requireRoles(["admin", "teacher"]),
+  asyncHandler(async (req, res) => {
+    const query = req.query as Record<string, unknown>;
+    const studentIdRaw = typeof req.params.studentId === "string" ? req.params.studentId : "";
+
+    if (!mongoose.Types.ObjectId.isValid(studentIdRaw)) {
+      return res.status(400).json({ message: "Invalid studentId" });
+    }
+
+    let fromDate: Date | undefined;
+    let toDate: Date | undefined;
+    try {
+      ({ fromDate, toDate } = parseDateRange(query));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid query";
+      return res.status(400).json({ message });
+    }
+
+    const student = await StudentModel.findById(studentIdRaw).select("_id classId fullName rollNumber status");
+    if (!student) {
+      return res.status(404).json({ message: "Student not found" });
+    }
+
+    if (req.auth?.activeRole === "teacher") {
+      const teacherClassIds = await resolveTeacherClassFilter(req.auth.userId);
+      if (!teacherClassIds.some((item) => item.toString() === student.classId.toString())) {
+        return res.status(403).json({ message: "Teacher is not assigned to this class" });
+      }
+    }
+
+    const classInfo = await ClassModel.findById(student.classId).select("_id name");
+    if (!classInfo) {
+      return res.status(404).json({ message: "Class not found" });
+    }
+
+    const classScope = { classId: student.classId };
+    const attendanceMatch = buildAttendanceMatch(classScope, fromDate, toDate);
+
+    const [historyRows, classDayRows] = await Promise.all([
+      AttendanceModel.aggregate<StudentHistoryRow>([
+        { $match: attendanceMatch },
+        { $addFields: { dayOfWeek: { $dayOfWeek: { date: "$attendanceDate", timezone: LOCAL_TIMEZONE } } } },
+        { $match: { dayOfWeek: { $ne: 1 } } },
+        { $unwind: "$entries" },
+        { $match: { "entries.studentId": student._id, "entries.status": { $in: ATTENDANCE_STATUSES } } },
+        { $project: { _id: 0, attendanceDate: 1, status: "$entries.status" } },
+        { $sort: { attendanceDate: -1 } }
+      ]),
+      AttendanceModel.aggregate<ClassDayRow>([
+        { $match: attendanceMatch },
+        { $addFields: { dayOfWeek: { $dayOfWeek: { date: "$attendanceDate", timezone: LOCAL_TIMEZONE } } } },
+        { $match: { dayOfWeek: { $ne: 1 } } },
+        { $group: { _id: "$attendanceDate" } },
+        { $group: { _id: null, totalClasses: { $sum: 1 } } }
+      ])
+    ]);
+
+    const totalClasses = classDayRows[0]?.totalClasses ?? 0;
+    const presentCount = historyRows.filter((item) => PRESENT_LIKE_STATUSES.includes(item.status)).length;
+
+    setAuditMeta(res, {
+      action: "REPORT_STUDENT_HISTORY_VIEW",
+      resource: "reports",
+      metadata: {
+        studentId: student._id.toString(),
+        classId: student.classId.toString(),
+        fromDate: fromDate ? toDateKey(fromDate) : null,
+        toDate: toDate ? toDateKey(toDate) : null,
+        totalClasses
+      }
+    });
+
+    return res.status(200).json({
+      generatedAt: new Date().toISOString(),
+      sundayHoliday: true,
+      student: {
+        studentId: student._id.toString(),
+        studentName: student.fullName,
+        rollNumber: student.rollNumber,
+        status: student.status,
+        classId: classInfo._id.toString(),
+        className: classInfo.name
+      },
+      summary: {
+        presentCount,
+        totalClasses,
+        attendanceRate: totalClasses === 0 ? 0 : Number(((presentCount / totalClasses) * 100).toFixed(1))
+      },
+      items: historyRows.map((item) => ({
+        attendanceDate: toDateKey(item.attendanceDate),
+        status: item.status
+      }))
+    });
+  })
+);
 
 reportingRouter.get(
   "/overview",
@@ -431,8 +682,11 @@ reportingRouter.get(
     const { page, pageSize } = parsePage(query);
 
     let scope;
+    let fromDate: Date | undefined;
+    let toDate: Date | undefined;
     try {
       scope = await resolveReportScope({ auth: req.auth, query });
+      ({ fromDate, toDate } = parseDateRange(query));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid query";
       const status = message.includes("assigned") ? 403 : 400;
@@ -440,23 +694,6 @@ reportingRouter.get(
     }
 
     const statusFilter = typeof query.status === "string" ? query.status : undefined;
-    const fromRaw = typeof query.fromDate === "string" ? query.fromDate : undefined;
-    const toRaw = typeof query.toDate === "string" ? query.toDate : undefined;
-
-    const fromDate = fromRaw ? normalizeDate(new Date(fromRaw)) : undefined;
-    const toDate = toRaw ? normalizeDate(new Date(toRaw)) : undefined;
-
-    if (fromDate && Number.isNaN(fromDate.getTime())) {
-      return res.status(400).json({ message: "Invalid fromDate" });
-    }
-
-    if (toDate && Number.isNaN(toDate.getTime())) {
-      return res.status(400).json({ message: "Invalid toDate" });
-    }
-
-    if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
-      return res.status(400).json({ message: "fromDate must be on or before toDate" });
-    }
 
     if (statusFilter && !ATTENDANCE_STATUSES.includes(statusFilter as AttendanceStatusKey)) {
       return res.status(400).json({ message: "Invalid status filter" });
@@ -524,30 +761,15 @@ reportingRouter.get(
     }
 
     let scope;
+    let fromDate: Date | undefined;
+    let toDate: Date | undefined;
     try {
       scope = await resolveReportScope({ auth: req.auth, query });
+      ({ fromDate, toDate } = parseDateRange(query));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Invalid query";
       const status = message.includes("assigned") ? 403 : 400;
       return res.status(status).json({ message });
-    }
-
-    const fromRaw = typeof query.fromDate === "string" ? query.fromDate : undefined;
-    const toRaw = typeof query.toDate === "string" ? query.toDate : undefined;
-
-    const fromDate = fromRaw ? normalizeDate(new Date(fromRaw)) : undefined;
-    const toDate = toRaw ? normalizeDate(new Date(toRaw)) : undefined;
-
-    if (fromDate && Number.isNaN(fromDate.getTime())) {
-      return res.status(400).json({ message: "Invalid fromDate" });
-    }
-
-    if (toDate && Number.isNaN(toDate.getTime())) {
-      return res.status(400).json({ message: "Invalid toDate" });
-    }
-
-    if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
-      return res.status(400).json({ message: "fromDate must be on or before toDate" });
     }
 
     const statusFilter = typeof query.status === "string" && query.status ? query.status : undefined;
