@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { Router } from "express";
+import { env } from "../../config/env.js";
 import { asyncHandler } from "../../lib/async-handler.js";
 import { setAuditMeta } from "../../middleware/audit-log.middleware.js";
 import { requireAuth, requireRoles } from "../../middleware/auth.middleware.js";
@@ -73,6 +74,19 @@ function errorResponse(res: { status: (code: number) => { json: (body: unknown) 
 }
 
 class AttendanceReviewConflict extends Error {}
+
+function academicSessionRange(session: string, today: string) {
+  const match = /^(\d{4})\s*-\s*(\d{2}|\d{4})$/.exec(session.trim());
+  if (!match) throw new Error(`Invalid ACADEMIC_SESSION format: ${session}`);
+  const startYear = Number(match[1]);
+  const endYear = match[2].length === 2
+    ? Math.floor(startYear / 100) * 100 + Number(match[2])
+    : Number(match[2]);
+  if (endYear !== startYear + 1) throw new Error(`Invalid ACADEMIC_SESSION range: ${session}`);
+  const from = `${startYear}-04-01`;
+  const sessionEnd = `${endYear}-03-31`;
+  return { academicSession: session, from, to: today < sessionEnd && today >= from ? today : sessionEnd };
+}
 
 async function getTeacher(userId: string) {
   return TeacherModel.findOne({
@@ -377,6 +391,66 @@ teacherAttendanceRouter.get(
         : Math.round(((entry.present + entry.late) / entry.workingDays) * 1000) / 10
     }));
     return res.json({ from: parsed.data.from, to: parsed.data.to, items });
+  })
+);
+
+teacherAttendanceRouter.get(
+  "/academic-session-report",
+  requireRoles(["admin", "teacher"]),
+  asyncHandler(async (req, res) => {
+    const context = await loadAttendanceContext();
+    const range = academicSessionRange(env.ACADEMIC_SESSION, context.today);
+    const teacherFilter: Record<string, unknown> = { isActive: true };
+
+    if (req.auth!.activeRole === "teacher") {
+      teacherFilter.userId = new mongoose.Types.ObjectId(req.auth!.userId);
+    } else {
+      const parsed = TeacherAttendanceReportSchema.safeParse({
+        from: range.from,
+        to: range.to,
+        teacherId: req.query.teacherId,
+        classId: req.query.classId
+      });
+      if (!parsed.success) return res.status(400).json({ message: "Invalid academic session report query", errors: parsed.error.flatten() });
+      if (parsed.data.teacherId) teacherFilter._id = parsed.data.teacherId;
+      if (parsed.data.classId) teacherFilter.classId = parsed.data.classId;
+    }
+
+    const teachers = await TeacherModel.find(teacherFilter).select("fullName classId").populate("classId", "name").lean();
+    const { rows } = await buildDayRows({ teachers, from: range.from, to: range.to });
+    const byTeacher = new Map<string, {
+      teacherId: string; teacherName: string; className: string;
+      workingDays: number; present: number; late: number; absent: number; onLeave: number;
+    }>();
+
+    for (const row of rows) {
+      const entry = byTeacher.get(row.teacherId) ?? {
+        teacherId: row.teacherId,
+        teacherName: row.teacherName,
+        className: row.className,
+        workingDays: 0,
+        present: 0,
+        late: 0,
+        absent: 0,
+        onLeave: 0
+      };
+      if (row.isWorkingDay && row.effectiveStatus !== null) {
+        entry.workingDays += 1;
+        if (row.effectiveStatus === "present") entry.present += 1;
+        else if (row.effectiveStatus === "late") entry.late += 1;
+        else if (row.effectiveStatus === "on_leave") entry.onLeave += 1;
+        else if (row.effectiveStatus === "absent") entry.absent += 1;
+      }
+      byTeacher.set(row.teacherId, entry);
+    }
+
+    const items = [...byTeacher.values()].map((entry) => ({
+      ...entry,
+      attendanceRate: entry.workingDays === 0
+        ? null
+        : Math.round(((entry.present + entry.late) / entry.workingDays) * 1000) / 10
+    }));
+    return res.json({ ...range, items });
   })
 );
 
