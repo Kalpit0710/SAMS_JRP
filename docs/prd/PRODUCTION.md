@@ -30,6 +30,7 @@ them in the image or source control.
 | `JWT_ACCESS_SECRET`  | Unique random secret, at least 32 characters           |
 | `JWT_REFRESH_SECRET` | Different unique random secret, at least 32 characters |
 | `CORS_ORIGIN`        | Exact public HTTPS origin                              |
+| `PUBLIC_APP_URL`     | Public web origin used in authenticated deep links     |
 | `TRUST_PROXY`        | Number of trusted ingress proxy hops, normally `1`     |
 | `SCHOOL_NAME`        | Public school display name                             |
 | `ACADEMIC_SESSION`   | Current school session                                 |
