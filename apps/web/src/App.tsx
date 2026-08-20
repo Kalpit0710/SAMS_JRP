@@ -1950,6 +1950,7 @@ function App() {
       : location.pathname.startsWith("/leaves")
         ? t("nav.teacherAttendance")
         : visibleNavItems.find((item) => location.pathname.startsWith(item.to))?.label ?? t("nav.dashboard");
+  const hasPageOwnedTitle = location.pathname.startsWith("/teacher-attendance") || location.pathname.startsWith("/leaves");
   // /leaves is a deep-link into the Teacher Attendance page's Leave Portal tab, not its own nav entry.
   const isNavItemActive = (path: string) =>
     location.pathname.startsWith(path) || (path === "/teacher-attendance" && location.pathname.startsWith("/leaves"));
@@ -2073,8 +2074,12 @@ function App() {
       <main className="main-wrapper">
         <header className="top-header">
           <div className="header-left">
-            <h1 className="header-title">{activeNavLabel}</h1>
-            <LayoutDashboard size={18} className="logo-icon" />
+            {!hasPageOwnedTitle ? (
+              <>
+                <h1 className="header-title">{activeNavLabel}</h1>
+                <LayoutDashboard size={18} className="logo-icon" />
+              </>
+            ) : null}
           </div>
 
           <div className="header-right">

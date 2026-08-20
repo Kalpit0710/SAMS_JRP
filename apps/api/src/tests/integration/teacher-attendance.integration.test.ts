@@ -180,6 +180,28 @@ describe("teacher self-attendance", () => {
     expect(overview.status).toBe(403);
   }, 30000);
 
+  it("returns an academic-session report scoped to the signed-in teacher or admin filters", async () => {
+    const { agent, accessToken, teacher } = await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+
+    const teacherReport = await agent
+      .get("/api/teacher-attendance/academic-session-report")
+      .set("Authorization", `Bearer ${accessToken}`);
+    expect(teacherReport.status).toBe(200);
+    expect(teacherReport.body.academicSession).toMatch(/^\d{4}-\d{2,4}$/);
+    expect(teacherReport.body.from).toMatch(/^\d{4}-04-01$/);
+    expect(teacherReport.body.to).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(teacherReport.body.items).toHaveLength(1);
+    expect(teacherReport.body.items[0].teacherId).toBe(String(teacher._id));
+
+    const adminReport = await adminAgent
+      .get(`/api/teacher-attendance/academic-session-report?teacherId=${teacher._id}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    expect(adminReport.status).toBe(200);
+    expect(adminReport.body.items).toHaveLength(1);
+    expect(adminReport.body.items[0].teacherId).toBe(String(teacher._id));
+  }, 30000);
+
   it("rejects invalid admin filters, impossible dates, and reversed ranges", async () => {
     const { agent, accessToken } = await setupTeacher();
     const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
