@@ -103,8 +103,28 @@ type AttendanceRequestItem = {
 type ClassItem = { _id: string; name: string };
 type TeacherItem = { _id: string; fullName: string };
 
+type AttendanceReportItem = {
+  teacherId: string;
+  teacherName: string;
+  className: string;
+  workingDays: number;
+  present: number;
+  late: number;
+  absent: number;
+  onLeave: number;
+  attendanceRate: number | null;
+};
+
+type AcademicSessionReport = {
+  academicSession: string;
+  from: string;
+  to: string;
+  items: AttendanceReportItem[];
+};
+
 type ViewMode = "calendar" | "tile" | "list";
 type TabKey = "self" | "view" | "summary" | "requests" | "settings" | "leave";
+type SummaryPeriod = "month" | "academicSession";
 
 const VIEW_MODE_KEY = "sams_teacher_attendance_view_mode";
 const DEFAULT_TIMEZONE = "Asia/Kolkata";
@@ -220,6 +240,7 @@ export default function TeacherAttendancePage({
   const [records, setRecords] = useState<AttendanceRecord[]>([]);
   const [myDays, setMyDays] = useState<OverviewRow[]>([]);
   const [overview, setOverview] = useState<OverviewRow[]>([]);
+  const [dailyOverview, setDailyOverview] = useState<OverviewRow[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
   const [myRequests, setMyRequests] = useState<AttendanceRequestItem[]>([]);
   const [adminRequests, setAdminRequests] = useState<AttendanceRequestItem[]>([]);
@@ -241,6 +262,9 @@ export default function TeacherAttendancePage({
   const [viewMonth, setViewMonth] = useState<string>(currentMonthKey());
   const [filterClassId, setFilterClassId] = useState("");
   const [filterTeacherId, setFilterTeacherId] = useState("");
+  const [summaryPeriod, setSummaryPeriod] = useState<SummaryPeriod>("month");
+  const [academicReport, setAcademicReport] = useState<AcademicSessionReport | null>(null);
+  const [academicReportLoading, setAcademicReportLoading] = useState(false);
   const [requestModal, setRequestModal] = useState<{ type: "correction" | "manual"; date: string; existingRecordId?: string } | null>(null);
   const [requestStatusValue, setRequestStatusValue] = useState<"on_time" | "late" | "on_leave">("on_time");
   const [requestReason, setRequestReason] = useState("");
@@ -289,15 +313,20 @@ export default function TeacherAttendancePage({
         const params = new URLSearchParams({ from, to });
         if (filterClassId) params.set("classId", filterClassId);
         if (filterTeacherId) params.set("teacherId", filterTeacherId);
-        const [result, policy, pending] = await Promise.allSettled([
+        const dailyParams = new URLSearchParams({ from: schoolToday, to: schoolToday });
+        if (filterClassId) dailyParams.set("classId", filterClassId);
+        if (filterTeacherId) dailyParams.set("teacherId", filterTeacherId);
+        const [result, dailyResult, policy, pending] = await Promise.allSettled([
           requestWithAuth<{ rows: OverviewRow[] }>(`/teacher-attendance/admin/overview?${params.toString()}`, { method: "GET" }),
+          requestWithAuth<{ rows: OverviewRow[] }>(`/teacher-attendance/admin/overview?${dailyParams.toString()}`, { method: "GET" }),
           requestWithAuth<Settings>("/teacher-attendance/settings", { method: "GET" }),
           requestWithAuth<{ items: AttendanceRequestItem[] }>("/teacher-attendance/admin/requests?pageSize=100", { method: "GET" })
         ]);
         if (result.status === "fulfilled") setOverview(result.value.rows);
+        if (dailyResult.status === "fulfilled") setDailyOverview(dailyResult.value.rows);
         if (policy.status === "fulfilled") setSettings(policy.value);
         if (pending.status === "fulfilled") setAdminRequests(pending.value.items);
-        const rejected = [result, policy, pending].find((item) => item.status === "rejected");
+        const rejected = [result, dailyResult, policy, pending].find((item) => item.status === "rejected");
         if (rejected?.status === "rejected") throw rejected.reason;
       } else {
         const [result, days, myPending] = await Promise.allSettled([
@@ -316,7 +345,7 @@ export default function TeacherAttendancePage({
     } finally {
       setLoading(false);
     }
-  }, [isAdmin, requestWithAuth, t, viewMonth, filterClassId, filterTeacherId]);
+  }, [isAdmin, requestWithAuth, t, viewMonth, filterClassId, filterTeacherId, schoolToday]);
 
   useEffect(() => {
     void load();
@@ -330,6 +359,33 @@ export default function TeacherAttendancePage({
     void requestWithAuth<{ items: ClassItem[] }>("/master-data/classes?active=true&pageSize=200", { method: "GET" }).then((res) => setClasses(res.items)).catch(showLoadError);
     void requestWithAuth<{ items: TeacherItem[] }>("/master-data/teachers?pageSize=200", { method: "GET" }).then((res) => setTeachers(res.items)).catch(showLoadError);
   }, [isAdmin, requestWithAuth, t]);
+
+  useEffect(() => {
+    if (activeTab !== "summary" || summaryPeriod !== "academicSession") return;
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (isAdmin && filterClassId) params.set("classId", filterClassId);
+    if (isAdmin && filterTeacherId) params.set("teacherId", filterTeacherId);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+
+    setAcademicReportLoading(true);
+    setAcademicReport(null);
+    setError(null);
+    void requestWithAuth<AcademicSessionReport>(`/teacher-attendance/academic-session-report${query}`, { method: "GET" })
+      .then((report) => {
+        if (!cancelled) setAcademicReport(report);
+      })
+      .catch((reportError: unknown) => {
+        if (!cancelled) setError(reportError instanceof Error ? reportError.message : t("teacherAttendance.academicReportFailed"));
+      })
+      .finally(() => {
+        if (!cancelled) setAcademicReportLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, filterClassId, filterTeacherId, isAdmin, requestWithAuth, summaryPeriod, t]);
 
   useEffect(() => {
     if (!requestModal && !conflictModal && !reviewModal && !correctionModal) return;
@@ -604,7 +660,12 @@ export default function TeacherAttendancePage({
     }
     return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
   }, [overview]);
-  const scopedTeacherCount = useMemo(() => new Set(overview.map((row) => row.teacherId)).size, [overview]);
+  const dailyAttendanceSummary = useMemo(() => ({
+    teachers: new Set(dailyOverview.map((row) => row.teacherId)).size,
+    onTime: dailyOverview.filter((row) => row.effectiveStatus === "present").length,
+    late: dailyOverview.filter((row) => row.effectiveStatus === "late").length,
+    absent: dailyOverview.filter((row) => row.effectiveStatus === "absent").length
+  }), [dailyOverview]);
   const pendingAdminRequests = useMemo(() => adminRequests.filter((request) => request.status === "pending"), [adminRequests]);
   const decidedAdminRequests = useMemo(() => adminRequests.filter((request) => request.status !== "pending"), [adminRequests]);
 
@@ -636,6 +697,26 @@ export default function TeacherAttendancePage({
     }
     return [...map.values()].sort((a, b) => a.teacherName.localeCompare(b.teacherName));
   }, [overview]);
+
+  const academicAdminSummaryRows = useMemo(() => (academicReport?.items ?? []).map((item) => ({
+    teacherId: item.teacherId,
+    teacherName: item.teacherName,
+    className: item.className,
+    present: item.present + item.late,
+    onLeave: item.onLeave,
+    missed: item.absent,
+    elapsed: item.workingDays
+  })), [academicReport]);
+  const displayedAdminSummaryRows = summaryPeriod === "academicSession" ? academicAdminSummaryRows : adminSummaryRows;
+  const academicTeacherItem = academicReport?.items[0];
+  const displayedTeacherSummary = summaryPeriod === "academicSession"
+    ? {
+        present: (academicTeacherItem?.present ?? 0) + (academicTeacherItem?.late ?? 0),
+        onLeave: academicTeacherItem?.onLeave ?? 0,
+        missed: academicTeacherItem?.absent ?? 0,
+        elapsed: academicTeacherItem?.workingDays ?? 0
+      }
+    : teacherSummary;
 
   const conflictRows = useMemo(() => overview.filter((row) => row.hasConflict), [overview]);
 
@@ -787,10 +868,10 @@ export default function TeacherAttendancePage({
           {isAdmin ? (
             <>
               <div className="ta-stat-grid">
-                <div className="ta-stat"><span className="ta-stat-label"><Users size={14} aria-hidden="true" />{t("teacherAttendance.totalTeachers")}</span><strong>{scopedTeacherCount}</strong></div>
-                <div className="ta-stat success"><span className="ta-stat-label">{t("teacherAttendance.onTime")}</span><strong>{overview.filter((row) => row.status === "present").length}</strong></div>
-                <div className="ta-stat warning"><span className="ta-stat-label">{t("teacherAttendance.lateCount")}</span><strong>{overview.filter((row) => row.status === "late").length}</strong></div>
-                <div className="ta-stat danger"><span className="ta-stat-label">{t("teacherAttendance.missedCount")}</span><strong>{overview.filter((row) => row.status === "absent").length}</strong></div>
+                <div className="ta-stat"><span className="ta-stat-label"><Users size={14} aria-hidden="true" />{t("teacherAttendance.totalTeachers")}</span><strong>{dailyAttendanceSummary.teachers}</strong></div>
+                <div className="ta-stat success"><span className="ta-stat-label">{t("teacherAttendance.onTime")}</span><strong>{dailyAttendanceSummary.onTime}</strong></div>
+                <div className="ta-stat warning"><span className="ta-stat-label">{t("teacherAttendance.lateCount")}</span><strong>{dailyAttendanceSummary.late}</strong></div>
+                <div className="ta-stat danger"><span className="ta-stat-label">{t("teacherAttendance.missedCount")}</span><strong>{dailyAttendanceSummary.absent}</strong></div>
               </div>
 
               {conflictRows.length > 0 ? (
@@ -1146,15 +1227,32 @@ export default function TeacherAttendancePage({
         isAdmin ? (
           <article className="table-panel">
             <div className="table-header">
-              <h3 className="panel-title">{t("teacherAttendance.summaryTitle")}</h3>
+              <div>
+                <h3 className="panel-title">{t("teacherAttendance.summaryTitle")}</h3>
+                <p className="panel-subtitle">
+                  {summaryPeriod === "academicSession" ? t("teacherAttendance.academicSummaryHint") : t("teacherAttendance.summaryHint")}
+                </p>
+              </div>
               <div className="table-controls">
-                <span className="panel-subtitle">{t("teacherAttendance.summaryHint")}</span>
+                <div className="manage-tabs" role="group" aria-label={t("teacherAttendance.summaryPeriod")}>
+                  <button type="button" className={`tab-btn ${summaryPeriod === "month" ? "active" : ""}`} onClick={() => setSummaryPeriod("month")}>{t("teacherAttendance.summaryMonth")}</button>
+                  <button type="button" className={`tab-btn ${summaryPeriod === "academicSession" ? "active" : ""}`} onClick={() => setSummaryPeriod("academicSession")}>{t("teacherAttendance.summaryAcademicSession")}</button>
+                </div>
+              </div>
+            </div>
+            <div className="ta-summary-range">
+              {summaryPeriod === "month" ? (
                 <div className="ta-month-nav">
                   <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, -1))}><ChevronLeft size={16} aria-hidden="true" /></button>
                   <strong>{formatMonthLabel(viewMonth)}</strong>
                   <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentSchoolMonth}><ChevronRight size={16} aria-hidden="true" /></button>
                 </div>
-              </div>
+              ) : academicReport ? (
+                <div className="ta-session-label">
+                  <strong>{t("teacherAttendance.academicSessionLabel", { session: academicReport.academicSession })}</strong>
+                  <span>{formatDate(academicReport.from)} – {formatDate(academicReport.to)}</span>
+                </div>
+              ) : null}
             </div>
             <div className="table-scroll">
               <table className="data-table">
@@ -1170,10 +1268,12 @@ export default function TeacherAttendancePage({
                   </tr>
                 </thead>
                 <tbody>
-                  {adminSummaryRows.length === 0 ? (
+                  {summaryPeriod === "academicSession" && academicReportLoading ? (
+                    <tr><td colSpan={7}>{t("teacherAttendance.academicReportLoading")}</td></tr>
+                  ) : displayedAdminSummaryRows.length === 0 ? (
                     <tr><td colSpan={7}>{t("teacherAttendance.noRecords")}</td></tr>
                   ) : (
-                    adminSummaryRows.map((row) => {
+                    displayedAdminSummaryRows.map((row) => {
                       const rate = row.elapsed > 0 ? Math.round((row.present / row.elapsed) * 100) : 0;
                       return (
                         <tr key={row.teacherId}>
@@ -1197,29 +1297,50 @@ export default function TeacherAttendancePage({
             <div className="ta-card-header">
               <div className="ta-card-title">
                 <span className="ta-card-icon"><PieChart size={18} aria-hidden="true" /></span>
-                <div><h3>{t("teacherAttendance.summaryTitle")}</h3><p>{t("teacherAttendance.summaryHint")}</p></div>
+                <div>
+                  <h3>{t("teacherAttendance.summaryTitle")}</h3>
+                  <p>{summaryPeriod === "academicSession" ? t("teacherAttendance.academicSummaryHint") : t("teacherAttendance.summaryHint")}</p>
+                </div>
               </div>
             </div>
 
-            <div className="ta-month-nav">
-              <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, -1))}><ChevronLeft size={16} aria-hidden="true" /></button>
-              <strong>{formatMonthLabel(viewMonth)}</strong>
-              <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentSchoolMonth}><ChevronRight size={16} aria-hidden="true" /></button>
+            <div className="manage-tabs" role="group" aria-label={t("teacherAttendance.summaryPeriod")}>
+              <button type="button" className={`tab-btn ${summaryPeriod === "month" ? "active" : ""}`} onClick={() => setSummaryPeriod("month")}>{t("teacherAttendance.summaryMonth")}</button>
+              <button type="button" className={`tab-btn ${summaryPeriod === "academicSession" ? "active" : ""}`} onClick={() => setSummaryPeriod("academicSession")}>{t("teacherAttendance.summaryAcademicSession")}</button>
             </div>
+
+            {summaryPeriod === "month" ? (
+              <div className="ta-month-nav">
+                <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, -1))}><ChevronLeft size={16} aria-hidden="true" /></button>
+                <strong>{formatMonthLabel(viewMonth)}</strong>
+                <button type="button" className="ta-btn ghost small" onClick={() => setViewMonth((month) => shiftMonth(month, 1))} disabled={viewMonth >= currentSchoolMonth}><ChevronRight size={16} aria-hidden="true" /></button>
+              </div>
+            ) : academicReport ? (
+              <div className="ta-session-label">
+                <strong>{t("teacherAttendance.academicSessionLabel", { session: academicReport.academicSession })}</strong>
+                <span>{formatDate(academicReport.from)} – {formatDate(academicReport.to)}</span>
+              </div>
+            ) : null}
 
             <div className="ta-summary-hero">
-              <div className="ta-summary-fraction large">
-                <strong>{teacherSummary.present} / {teacherSummary.elapsed}</strong>
-                <small>{t("teacherAttendance.daysPresent")}</small>
-              </div>
-              <div className="ta-summary-percent">
-                {teacherSummary.elapsed > 0 ? Math.round((teacherSummary.present / teacherSummary.elapsed) * 100) : 0}%
-              </div>
-              <div className="ta-stat-grid">
-                <div className="ta-stat success"><span className="ta-stat-label">{t("teacherAttendance.daysPresentLabel")}</span><strong>{teacherSummary.present}</strong></div>
-                <div className="ta-stat"><span className="ta-stat-label">{t("teacherAttendance.onLeaveDaysLabel")}</span><strong>{teacherSummary.onLeave}</strong></div>
-                <div className="ta-stat danger"><span className="ta-stat-label">{t("teacherAttendance.missedDaysLabel")}</span><strong>{teacherSummary.missed}</strong></div>
-              </div>
+              {summaryPeriod === "academicSession" && academicReportLoading ? (
+                <div className="ta-empty"><PieChart size={26} aria-hidden="true" /><p>{t("teacherAttendance.academicReportLoading")}</p></div>
+              ) : (
+                <>
+                  <div className="ta-summary-fraction large">
+                    <strong>{displayedTeacherSummary.present} / {displayedTeacherSummary.elapsed}</strong>
+                    <small>{t("teacherAttendance.daysPresent")}</small>
+                  </div>
+                  <div className="ta-summary-percent">
+                    {displayedTeacherSummary.elapsed > 0 ? Math.round((displayedTeacherSummary.present / displayedTeacherSummary.elapsed) * 100) : 0}%
+                  </div>
+                  <div className="ta-stat-grid">
+                    <div className="ta-stat success"><span className="ta-stat-label">{t("teacherAttendance.daysPresentLabel")}</span><strong>{displayedTeacherSummary.present}</strong></div>
+                    <div className="ta-stat"><span className="ta-stat-label">{t("teacherAttendance.onLeaveDaysLabel")}</span><strong>{displayedTeacherSummary.onLeave}</strong></div>
+                    <div className="ta-stat danger"><span className="ta-stat-label">{t("teacherAttendance.missedDaysLabel")}</span><strong>{displayedTeacherSummary.missed}</strong></div>
+                  </div>
+                </>
+              )}
             </div>
           </section>
         )
@@ -1295,14 +1416,14 @@ export default function TeacherAttendancePage({
               <span className="ta-card-icon"><SlidersHorizontal size={18} aria-hidden="true" /></span>
               <div><h3>{t("teacherAttendance.settings")}</h3><p>{t("teacherAttendance.settingsHint")}</p></div>
             </div>
-            <label className="ta-switch">
+            <label className="ta-switch ta-settings-enabled">
               <input type="checkbox" checked={settings.enabled} onChange={(event) => setSettings({ ...settings, enabled: event.target.checked })} />
               <span className="ta-switch-track" aria-hidden="true"><span className="ta-switch-thumb" /></span>
               <span className="ta-switch-text">{t("teacherAttendance.enabled")}</span>
             </label>
           </div>
 
-          <div className="ta-field-grid">
+          <div className="ta-field-grid ta-settings-fields">
             <label className="ta-field">{t("teacherAttendance.windowStart")}<input type="time" value={settings.markWindowStart} onChange={(event) => setSettings({ ...settings, markWindowStart: event.target.value })} /></label>
             <label className="ta-field">{t("teacherAttendance.windowEnd")}<input type="time" value={settings.markWindowEnd} onChange={(event) => setSettings({ ...settings, markWindowEnd: event.target.value })} /></label>
             <label className="ta-field">{t("teacherAttendance.threshold")}<input type="time" value={settings.inTimeThreshold} onChange={(event) => setSettings({ ...settings, inTimeThreshold: event.target.value })} /></label>
@@ -1312,29 +1433,31 @@ export default function TeacherAttendancePage({
 
           <p className="ta-policy-hint">{t("teacherAttendance.finalizationHint", { time: settings.markWindowEnd })}</p>
 
-          <div className="ta-toggle-stack">
-            <label className="ta-switch">
-              <input type="checkbox" checked={settings.allowCorrectionToLeave} onChange={(event) => setSettings({ ...settings, allowCorrectionToLeave: event.target.checked })} />
-              <span className="ta-switch-track" aria-hidden="true"><span className="ta-switch-thumb" /></span>
-              <span className="ta-switch-text">{t("teacherAttendance.allowCorrectionToLeave")}</span>
-            </label>
-            <label className="ta-switch">
-              <input type="checkbox" checked={settings.requireConflictResolution} onChange={(event) => setSettings({ ...settings, requireConflictResolution: event.target.checked })} />
-              <span className="ta-switch-track" aria-hidden="true"><span className="ta-switch-thumb" /></span>
-              <span className="ta-switch-text">{t("teacherAttendance.requireConflictResolution")}</span>
-            </label>
-          </div>
-
-          <div className="ta-geo-box">
-            <div className="ta-geo-info">
-              <span className="ta-field-label">{t("teacherAttendance.schoolLocation")}</span>
-              <strong className="ta-coords">{settings.geofenceCenterLat.toFixed(6)}, {settings.geofenceCenterLng.toFixed(6)}</strong>
-              <small>{locationAccuracy !== null ? t("teacherAttendance.accuracy", { meters: Math.round(locationAccuracy) }) : t("teacherAttendance.locationSaved")}</small>
+          <div className="ta-settings-lower">
+            <div className="ta-toggle-stack">
+              <label className="ta-switch ta-policy-switch">
+                <input type="checkbox" checked={settings.allowCorrectionToLeave} onChange={(event) => setSettings({ ...settings, allowCorrectionToLeave: event.target.checked })} />
+                <span className="ta-switch-track" aria-hidden="true"><span className="ta-switch-thumb" /></span>
+                <span className="ta-switch-text">{t("teacherAttendance.allowCorrectionToLeave")}</span>
+              </label>
+              <label className="ta-switch ta-policy-switch">
+                <input type="checkbox" checked={settings.requireConflictResolution} onChange={(event) => setSettings({ ...settings, requireConflictResolution: event.target.checked })} />
+                <span className="ta-switch-track" aria-hidden="true"><span className="ta-switch-thumb" /></span>
+                <span className="ta-switch-text">{t("teacherAttendance.requireConflictResolution")}</span>
+              </label>
             </div>
-            <button type="button" className="ta-btn ghost" onClick={() => void captureSchoolLocation()} disabled={locationStatus === "capturing"}>
-              <Crosshair size={16} className={locationStatus === "capturing" ? "ta-spin" : undefined} aria-hidden="true" />
-              {locationStatus === "capturing" ? t("teacherAttendance.locating") : t("teacherAttendance.useCurrentLocation")}
-            </button>
+
+            <div className="ta-geo-box">
+              <div className="ta-geo-info">
+                <span className="ta-field-label">{t("teacherAttendance.schoolLocation")}</span>
+                <strong className="ta-coords">{settings.geofenceCenterLat.toFixed(6)}, {settings.geofenceCenterLng.toFixed(6)}</strong>
+                <small>{locationAccuracy !== null ? t("teacherAttendance.accuracy", { meters: Math.round(locationAccuracy) }) : t("teacherAttendance.locationSaved")}</small>
+              </div>
+              <button type="button" className="ta-btn ghost" onClick={() => void captureSchoolLocation()} disabled={locationStatus === "capturing"}>
+                <Crosshair size={16} className={locationStatus === "capturing" ? "ta-spin" : undefined} aria-hidden="true" />
+                {locationStatus === "capturing" ? t("teacherAttendance.locating") : t("teacherAttendance.useCurrentLocation")}
+              </button>
+            </div>
           </div>
 
           <div className="ta-card-actions">

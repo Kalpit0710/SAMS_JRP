@@ -1448,7 +1448,7 @@ input:focus {
 }
 
 .ta-policy-hint {
-  margin: 0;
+  margin: -0.15rem 0 0;
   color: var(--text-secondary);
   font-size: 0.82rem;
   line-height: 1.5;
@@ -1457,7 +1457,7 @@ input:focus {
 .ta-toggle-stack {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.5rem;
 }
 
 .ta-conflict-card {
@@ -2383,9 +2383,19 @@ input:focus {
 .ta-spin { animation: spin 1s linear infinite; }
 
 /* Settings form */
+.ta-settings {
+  gap: 1.15rem;
+}
+
 .ta-field-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.ta-settings-lower {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.75rem;
 }
 
@@ -2442,6 +2452,14 @@ input:focus {
 }
 
 .ta-geo-box .ta-btn { width: 100%; }
+
+.ta-settings .ta-card-actions {
+  margin: 0 -1rem -1rem;
+  padding: 1rem;
+  border-top: 1px solid var(--border-light);
+  background: color-mix(in srgb, var(--bg-input) 35%, transparent);
+  border-radius: 0 0 14px 14px;
+}
 
 /* Switch */
 .ta-switch {
@@ -2503,6 +2521,34 @@ input:focus {
   color: var(--text-secondary);
   font-size: 0.82rem;
   font-weight: 600;
+}
+
+.ta-settings-enabled {
+  flex-direction: row-reverse;
+}
+
+.ta-settings-enabled .ta-switch-text {
+  color: var(--text-primary);
+}
+
+.ta-policy-switch {
+  width: 100%;
+  min-height: 52px;
+  justify-content: space-between;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-input);
+}
+
+.ta-policy-switch .ta-switch-track {
+  order: 2;
+}
+
+.ta-policy-switch .ta-switch-text {
+  order: 1;
+  color: var(--text-primary);
+  line-height: 1.35;
 }
 
 /* Row list (replaces tables on mobile) */
@@ -2718,6 +2764,39 @@ input:focus {
   gap: 0.75rem;
   margin: 0.5rem 0 1rem;
   font-size: 0.9rem;
+}
+
+.ta-summary-range {
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 1.5rem;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-input);
+}
+
+.ta-summary-range .ta-month-nav {
+  margin: 0;
+}
+
+.ta-session-label {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  margin: 0.5rem 0 1rem;
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.ta-summary-range .ta-session-label {
+  margin: 0;
+}
+
+.ta-session-label span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
 }
 
 .ta-calendar-grid {
@@ -2955,6 +3034,11 @@ input:focus {
   .ta-card { padding: 1.35rem; }
   .ta-stat-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .ta-field-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .ta-settings-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .ta-settings .ta-card-actions {
+    margin: 0 -1.35rem -1.35rem;
+    padding: 1rem 1.35rem;
+  }
   .ta-action-stack { grid-template-columns: 1fr 1fr; }
   .ta-geo-box {
     flex-direction: row;
@@ -2968,6 +3052,8 @@ input:focus {
 @media (min-width: 900px) {
   .ta-gps-visual { width: 64px; height: 64px; }
   .ta-gps-pin { width: 50px; height: 50px; }
+  .ta-settings-fields { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .ta-settings-lower { grid-template-columns: minmax(300px, 0.8fr) minmax(420px, 1.2fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {
