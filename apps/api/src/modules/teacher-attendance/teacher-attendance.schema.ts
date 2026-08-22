@@ -35,6 +35,13 @@ export const MarkTeacherAttendanceSchema = z.object({
   })
 });
 
+export const UpdateTeacherPhoneSchema = z.object({
+  phoneNumber: z.string().trim().refine((value) => {
+    const digits = value.replace(/\D/g, "");
+    return /^\+?[\d\s()-]+$/.test(value) && digits.length >= 10 && digits.length <= 15;
+  }, "Enter a valid phone number with 10 to 15 digits")
+});
+
 export const TeacherAttendanceSettingsSchema = z.object({
   enabled: z.boolean(),
   geofenceCenterLat: z.number().finite().min(-90).max(90),
