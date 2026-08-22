@@ -17,6 +17,7 @@ import {
   MapPin,
   Navigation,
   PieChart,
+  Phone,
   RefreshCw,
   Rows3,
   ShieldAlert,
@@ -102,6 +103,7 @@ type AttendanceRequestItem = {
 
 type ClassItem = { _id: string; name: string };
 type TeacherItem = { _id: string; fullName: string };
+type TeacherProfile = { _id: string; fullName: string; phoneNumber: string; classId: string | null };
 
 type AttendanceReportItem = {
   teacherId: string;
@@ -113,6 +115,7 @@ type AttendanceReportItem = {
   absent: number;
   onLeave: number;
   attendanceRate: number | null;
+  averageCheckInTime: string | null;
 };
 
 type AcademicSessionReport = {
@@ -154,6 +157,27 @@ function formatMonthLabel(monthKey: string) {
 function formatTime(value?: string, timezone = DEFAULT_TIMEZONE) {
   if (!value) return "—";
   return new Date(value).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", timeZone: timezone });
+}
+
+function timeMinutesInZone(value: string | undefined, timezone: string) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : null;
+}
+
+function formatAverageTime(totalMinutes: number, count: number) {
+  if (count === 0) return null;
+  const rounded = Math.round(totalMinutes / count);
+  return `${String(Math.floor(rounded / 60)).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
 }
 
 function statusTone(status: string) {
@@ -246,6 +270,10 @@ export default function TeacherAttendancePage({
   const [adminRequests, setAdminRequests] = useState<AttendanceRequestItem[]>([]);
   const [classes, setClasses] = useState<ClassItem[]>([]);
   const [teachers, setTeachers] = useState<TeacherItem[]>([]);
+  const [teacherProfile, setTeacherProfile] = useState<TeacherProfile | null>(null);
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [phoneSaving, setPhoneSaving] = useState(false);
+  const [phoneError, setPhoneError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -329,15 +357,20 @@ export default function TeacherAttendancePage({
         const rejected = [result, dailyResult, policy, pending].find((item) => item.status === "rejected");
         if (rejected?.status === "rejected") throw rejected.reason;
       } else {
-        const [result, days, myPending] = await Promise.allSettled([
+        const [result, days, myPending, profile] = await Promise.allSettled([
           requestWithAuth<{ items: AttendanceRecord[] }>(`/teacher-attendance/me?from=${from}&to=${to}&pageSize=100`, { method: "GET" }),
           requestWithAuth<{ rows: OverviewRow[] }>(`/teacher-attendance/me/days?from=${from}&to=${to}`, { method: "GET" }),
-          requestWithAuth<{ items: AttendanceRequestItem[] }>("/teacher-attendance/requests/me?pageSize=100", { method: "GET" })
+          requestWithAuth<{ items: AttendanceRequestItem[] }>("/teacher-attendance/requests/me?pageSize=100", { method: "GET" }),
+          requestWithAuth<{ item: TeacherProfile }>("/teacher-attendance/me/profile", { method: "GET" })
         ]);
         if (result.status === "fulfilled") setRecords(result.value.items);
         if (days.status === "fulfilled") setMyDays(days.value.rows);
         if (myPending.status === "fulfilled") setMyRequests(myPending.value.items);
-        const rejected = [result, days, myPending].find((item) => item.status === "rejected");
+        if (profile.status === "fulfilled") {
+          setTeacherProfile(profile.value.item);
+          setPhoneNumber(profile.value.item.phoneNumber);
+        }
+        const rejected = [result, days, myPending, profile].find((item) => item.status === "rejected");
         if (rejected?.status === "rejected") throw rejected.reason;
       }
     } catch (loadError) {
@@ -650,6 +683,9 @@ export default function TeacherAttendancePage({
   const recordDetail = (record: AttendanceRecord) => (record.source === "manual_application"
     ? t("teacherAttendance.addedAfterApproval")
     : `${t("teacherAttendance.checkIn")}: ${formatTime(record.checkInAtServer, timezone)}`);
+  const arrivalTime = (row: OverviewRow) => row.record && row.record.source !== "manual_application"
+    ? formatTime(row.record.checkInAtServer, timezone)
+    : null;
   const overviewByDate = useMemo(() => new Map(overview.map((row) => [row.attendanceDate, row])), [overview]);
   const overviewByDateGroup = useMemo(() => {
     const map = new Map<string, OverviewRow[]>();
@@ -683,10 +719,15 @@ export default function TeacherAttendancePage({
   }, [myDays]);
 
   const adminSummaryRows = useMemo(() => {
-    const map = new Map<string, { teacherId: string; teacherName: string; className: string; present: number; onLeave: number; missed: number; elapsed: number }>();
+    const map = new Map<string, { teacherId: string; teacherName: string; className: string; present: number; onLeave: number; missed: number; elapsed: number; totalCheckInMinutes: number; timedCheckIns: number }>();
     for (const row of overview) {
       const entry = map.get(row.teacherId)
-        ?? { teacherId: row.teacherId, teacherName: row.teacherName, className: row.className, present: 0, onLeave: 0, missed: 0, elapsed: 0 };
+        ?? { teacherId: row.teacherId, teacherName: row.teacherName, className: row.className, present: 0, onLeave: 0, missed: 0, elapsed: 0, totalCheckInMinutes: 0, timedCheckIns: 0 };
+      const checkInMinutes = row.record?.source === "manual_application" ? null : timeMinutesInZone(row.record?.checkInAtServer, timezone);
+      if (checkInMinutes !== null) {
+        entry.totalCheckInMinutes += checkInMinutes;
+        entry.timedCheckIns += 1;
+      }
       if (row.isWorkingDay && row.effectiveStatus !== null) {
         entry.elapsed += 1;
         if (row.effectiveStatus === "present" || row.effectiveStatus === "late") entry.present += 1;
@@ -695,8 +736,11 @@ export default function TeacherAttendancePage({
       }
       map.set(row.teacherId, entry);
     }
-    return [...map.values()].sort((a, b) => a.teacherName.localeCompare(b.teacherName));
-  }, [overview]);
+    return [...map.values()].map(({ totalCheckInMinutes, timedCheckIns, ...entry }) => ({
+      ...entry,
+      averageCheckInTime: formatAverageTime(totalCheckInMinutes, timedCheckIns)
+    })).sort((a, b) => a.teacherName.localeCompare(b.teacherName));
+  }, [overview, timezone]);
 
   const academicAdminSummaryRows = useMemo(() => (academicReport?.items ?? []).map((item) => ({
     teacherId: item.teacherId,
@@ -705,7 +749,8 @@ export default function TeacherAttendancePage({
     present: item.present + item.late,
     onLeave: item.onLeave,
     missed: item.absent,
-    elapsed: item.workingDays
+    elapsed: item.workingDays,
+    averageCheckInTime: item.averageCheckInTime
   })), [academicReport]);
   const displayedAdminSummaryRows = summaryPeriod === "academicSession" ? academicAdminSummaryRows : adminSummaryRows;
   const academicTeacherItem = academicReport?.items[0];
@@ -719,6 +764,31 @@ export default function TeacherAttendancePage({
     : teacherSummary;
 
   const conflictRows = useMemo(() => overview.filter((row) => row.hasConflict), [overview]);
+
+  const savePhoneNumber = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const digits = phoneNumber.replace(/\D/g, "");
+    if (digits.length < 10 || digits.length > 15) {
+      setPhoneError(t("teacherAttendance.phoneInvalid"));
+      return;
+    }
+    setPhoneSaving(true);
+    setPhoneError(null);
+    try {
+      const response = await requestWithAuth<{ item: TeacherProfile }>("/teacher-attendance/me/profile", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phoneNumber: phoneNumber.trim() })
+      });
+      setTeacherProfile(response.item);
+      setPhoneNumber(response.item.phoneNumber);
+      setNotice(t("teacherAttendance.phoneSaved"));
+    } catch (phoneSaveError) {
+      setPhoneError(phoneSaveError instanceof Error ? phoneSaveError.message : t("teacherAttendance.phoneSaveFailed"));
+    } finally {
+      setPhoneSaving(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -738,8 +808,8 @@ export default function TeacherAttendancePage({
     { key: "view", label: t("teacherAttendance.tabView"), icon: <CalendarDays size={16} aria-hidden="true" /> },
     { key: "summary", label: t("teacherAttendance.tabSummary"), icon: <PieChart size={16} aria-hidden="true" /> },
     ...(isAdmin ? [{ key: "requests" as TabKey, label: t("teacherAttendance.tabRequests"), icon: <FileEdit size={16} aria-hidden="true" /> }] : []),
-    ...(isAdmin ? [{ key: "settings" as TabKey, label: t("teacherAttendance.tabSettings"), icon: <SlidersHorizontal size={16} aria-hidden="true" /> }] : []),
-    { key: "leave", label: t("teacherAttendance.tabLeave"), icon: <History size={16} aria-hidden="true" /> }
+    { key: "leave", label: t("teacherAttendance.tabLeave"), icon: <History size={16} aria-hidden="true" /> },
+    ...(isAdmin ? [{ key: "settings" as TabKey, label: t("teacherAttendance.tabSettings"), icon: <SlidersHorizontal size={16} aria-hidden="true" /> }] : [])
   ];
 
   const todayRecord = records.find((record) => record.attendanceDate === schoolToday);
@@ -1002,7 +1072,10 @@ export default function TeacherAttendancePage({
                           if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, date);
                           else openCorrectionModal(row.record._id, row.teacherName, date);
                         }}
-                        title={row ? row.holidayName ?? t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status }) : undefined}
+                        title={row ? [
+                          row.holidayName ?? t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status }),
+                          arrivalTime(row) ? `${t("teacherAttendance.checkIn")}: ${arrivalTime(row)}` : null
+                        ].filter(Boolean).join(" · ") : undefined}
                       >
                         <span className="ta-calendar-date">{Number(date.slice(-2))}</span>
                       </button>
@@ -1021,8 +1094,9 @@ export default function TeacherAttendancePage({
                     <div className="ta-tile" key={`${row.teacherId}-${row.attendanceDate}`}>
                       <span className={`status-badge ${statusTone(row.status)}`}>{t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}</span>
                       <strong>{row.teacherName}</strong>
-                      <small>{row.className}</small>
+                      <small>{row.className || t("teacherAttendance.noClassAssigned")}</small>
                       <small>{formatDate(row.attendanceDate)}</small>
+                      {row.record ? <small>{recordDetail(row.record)}</small> : null}
                       {row.holidayName ? <small className="ta-pending-label">{row.holidayName}</small> : null}
                       {row.record ? (
                         <button
@@ -1057,9 +1131,10 @@ export default function TeacherAttendancePage({
                                     if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, row.attendanceDate);
                                     else openCorrectionModal(row.record._id, row.teacherName, row.attendanceDate);
                                   }}
-                                  title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}`}
+                                  title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}${arrivalTime(row) ? ` · ${t("teacherAttendance.checkIn")}: ${arrivalTime(row)}` : ""}`}
                                 >
-                                  {row.teacherName}
+                                  <span>{row.teacherName}</span>
+                                  {arrivalTime(row) ? <small>{arrivalTime(row)}</small> : null}
                                 </button>
                               ))}
                             </div>
@@ -1099,7 +1174,7 @@ export default function TeacherAttendancePage({
                           <span className="ta-avatar" aria-hidden="true">{row.teacherName.trim().charAt(0).toUpperCase()}</span>
                           <div className="ta-row-text">
                             <strong>{row.teacherName}</strong>
-                            <small>{row.className} · {formatDate(row.attendanceDate)}</small>
+                            <small>{row.className || t("teacherAttendance.noClassAssigned")} · {formatDate(row.attendanceDate)}{row.record ? ` · ${recordDetail(row.record)}` : ""}</small>
                           </div>
                         </div>
                         <div className="ta-row-side">
@@ -1148,9 +1223,10 @@ export default function TeacherAttendancePage({
                                     if (row.hasConflict) openConflictModal(row.record._id, row.teacherName, row.attendanceDate);
                                     else openCorrectionModal(row.record._id, row.teacherName, row.attendanceDate);
                                   }}
-                                  title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}`}
+                                  title={`${row.teacherName} — ${t(`teacherAttendance.status.${row.status}`, { defaultValue: row.status })}${arrivalTime(row) ? ` · ${t("teacherAttendance.checkIn")}: ${arrivalTime(row)}` : ""}`}
                                 >
-                                  {row.teacherName}
+                                  <span>{row.teacherName}</span>
+                                  {arrivalTime(row) ? <small>{arrivalTime(row)}</small> : null}
                                 </button>
                               ))}
                             </div>
@@ -1264,25 +1340,27 @@ export default function TeacherAttendancePage({
                     <th>{t("teacherAttendance.onLeaveDaysLabel")}</th>
                     <th>{t("teacherAttendance.missedDaysLabel")}</th>
                     <th>{t("teacherAttendance.summaryTotalDays")}</th>
+                    <th>{t("teacherAttendance.averageCheckIn")}</th>
                     <th>{t("dashboard.rateCol")}</th>
                   </tr>
                 </thead>
                 <tbody>
                   {summaryPeriod === "academicSession" && academicReportLoading ? (
-                    <tr><td colSpan={7}>{t("teacherAttendance.academicReportLoading")}</td></tr>
+                    <tr><td colSpan={8}>{t("teacherAttendance.academicReportLoading")}</td></tr>
                   ) : displayedAdminSummaryRows.length === 0 ? (
-                    <tr><td colSpan={7}>{t("teacherAttendance.noRecords")}</td></tr>
+                    <tr><td colSpan={8}>{t("teacherAttendance.noRecords")}</td></tr>
                   ) : (
                     displayedAdminSummaryRows.map((row) => {
                       const rate = row.elapsed > 0 ? Math.round((row.present / row.elapsed) * 100) : 0;
                       return (
                         <tr key={row.teacherId}>
                           <td>{row.teacherName}</td>
-                          <td>{row.className}</td>
+                          <td>{row.className || t("teacherAttendance.noClassAssigned")}</td>
                           <td>{row.present}</td>
                           <td>{row.onLeave}</td>
                           <td>{row.missed}</td>
                           <td>{row.elapsed}</td>
+                          <td>{row.averageCheckInTime ?? "—"}</td>
                           <td><span className={`status-badge ${rate >= 80 ? "present" : rate >= 50 ? "late" : "absent"}`}>{rate}%</span></td>
                         </tr>
                       );
@@ -1467,6 +1545,34 @@ export default function TeacherAttendancePage({
       ) : null}
 
       {activeTab === "leave" ? <LeavePage role={isAdmin ? "admin" : "teacher"} requestWithAuth={requestWithAuth} /> : null}
+
+      {!isAdmin && teacherProfile && !teacherProfile.phoneNumber.trim() ? (
+        <div className="ta-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="teacher-phone-title">
+          <form className="ta-modal ta-phone-modal" onSubmit={savePhoneNumber}>
+            <div className="ta-phone-icon" aria-hidden="true"><Phone size={22} /></div>
+            <div>
+              <h3 id="teacher-phone-title">{t("teacherAttendance.phoneRequiredTitle")}</h3>
+              <p>{t("teacherAttendance.phoneRequiredHint")}</p>
+            </div>
+            <label className="ta-field">{t("manage.fieldPhoneNumber")}
+              <input
+                type="tel"
+                inputMode="tel"
+                autoComplete="tel"
+                value={phoneNumber}
+                onChange={(event) => setPhoneNumber(event.target.value)}
+                placeholder={t("manage.phonePlaceholder")}
+                required
+                autoFocus
+              />
+            </label>
+            {phoneError ? <p className="ta-form-error" role="alert">{phoneError}</p> : null}
+            <button type="submit" className="ta-btn primary" disabled={phoneSaving}>
+              {phoneSaving ? t("teacherAttendance.saving") : t("teacherAttendance.savePhone")}
+            </button>
+          </form>
+        </div>
+      ) : null}
 
       {requestModal ? (
         <div className="ta-modal-overlay" role="dialog" aria-modal="true" onClick={() => setRequestModal(null)}>

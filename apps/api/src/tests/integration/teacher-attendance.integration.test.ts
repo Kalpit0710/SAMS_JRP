@@ -66,7 +66,7 @@ async function loginAs(username: string, password: string) {
   return { agent, accessToken: login.body.accessToken as string };
 }
 
-async function setupTeacher() {
+async function setupTeacher({ withClass = true }: { withClass?: boolean } = {}) {
   const user = await UserModel.create({
     fullName: "Attendance Teacher",
     username: "attendance.teacher",
@@ -74,11 +74,11 @@ async function setupTeacher() {
     roles: ["teacher"],
     isActive: true
   });
-  const classDoc = await ClassModel.create({ name: "Class Attendance" });
+  const classDoc = withClass ? await ClassModel.create({ name: "Class Attendance" }) : null;
   const teacher = await TeacherModel.create({
     userId: user._id,
     fullName: user.fullName,
-    classId: classDoc._id,
+    ...(classDoc ? { classId: classDoc._id } : {}),
     isActive: true
   });
   await TeacherAttendanceSettingsModel.create({
@@ -146,6 +146,31 @@ describe("teacher self-attendance", () => {
     expect(await TeacherAttendanceRecordModel.countDocuments()).toBe(1);
   }, 30000);
 
+  it("lets staff without a class use self-attendance and history", async () => {
+    const { agent, accessToken, teacher } = await setupTeacher({ withClass: false });
+    expect(teacher.classId).toBeUndefined();
+
+    const marked = await agent
+      .post("/api/teacher-attendance/mark")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ location: { lat: 28.6139, lng: 77.209, accuracyMeters: 10 } });
+    expect(marked.status).toBe(201);
+
+    const history = await agent
+      .get(`/api/teacher-attendance/me/days?from=${schoolDateKey()}&to=${schoolDateKey()}`)
+      .set("Authorization", `Bearer ${accessToken}`);
+    expect(history.status).toBe(200);
+    expect(history.body.rows).toEqual([
+      expect.objectContaining({
+        teacherId: teacher.id,
+        classId: null,
+        className: "",
+        status: "present",
+        record: expect.objectContaining({ status: "on_time" })
+      })
+    ]);
+  }, 30000);
+
   it("enforces accuracy, radius, and full-day leave gates", async () => {
     const { agent, accessToken, teacher } = await setupTeacher();
     const base = { location: { lat: 28.6139, lng: 77.209, accuracyMeters: 10 } };
@@ -180,6 +205,33 @@ describe("teacher self-attendance", () => {
     expect(overview.status).toBe(403);
   }, 30000);
 
+  it("requires a valid phone number and lets a teacher complete their profile", async () => {
+    const { agent, accessToken, teacher } = await setupTeacher({ withClass: false });
+    const authorization = { Authorization: `Bearer ${accessToken}` };
+
+    const profile = await agent.get("/api/teacher-attendance/me/profile").set(authorization);
+    expect(profile.status).toBe(200);
+    expect(profile.body.item).toEqual(expect.objectContaining({
+      _id: teacher.id,
+      phoneNumber: "",
+      classId: null
+    }));
+
+    const invalid = await agent
+      .patch("/api/teacher-attendance/me/profile")
+      .set(authorization)
+      .send({ phoneNumber: "123" });
+    expect(invalid.status).toBe(400);
+
+    const updated = await agent
+      .patch("/api/teacher-attendance/me/profile")
+      .set(authorization)
+      .send({ phoneNumber: "+91 98765 43210" });
+    expect(updated.status).toBe(200);
+    expect(updated.body.item.phoneNumber).toBe("+91 98765 43210");
+    expect((await TeacherModel.findById(teacher._id).lean())?.phoneNumber).toBe("+91 98765 43210");
+  }, 30000);
+
   it("returns an academic-session report scoped to the signed-in teacher or admin filters", async () => {
     const { agent, accessToken, teacher } = await setupTeacher();
     const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
@@ -200,6 +252,31 @@ describe("teacher self-attendance", () => {
     expect(adminReport.status).toBe(200);
     expect(adminReport.body.items).toHaveLength(1);
     expect(adminReport.body.items[0].teacherId).toBe(String(teacher._id));
+  }, 30000);
+
+  it("reports average teacher check-in time in the school timezone", async () => {
+    const { teacher } = await setupTeacher();
+    const { agent: adminAgent, accessToken: adminToken } = await setupAdmin();
+    const teacherUser = await UserModel.findOne({ username: "attendance.teacher" }).lean();
+    const attendanceDate = schoolDateKey();
+    await TeacherAttendanceRecordModel.create({
+      teacherId: teacher._id,
+      attendanceDate,
+      checkInAtServer: new Date(`${attendanceDate}T03:00:00.000Z`),
+      status: "on_time",
+      source: "self",
+      createdBy: teacherUser!._id,
+      updatedBy: teacherUser!._id
+    });
+
+    const report = await adminAgent
+      .get(`/api/teacher-attendance/admin/report?from=${attendanceDate}&to=${attendanceDate}&teacherId=${teacher._id}`)
+      .set("Authorization", `Bearer ${adminToken}`);
+    expect(report.status).toBe(200);
+    expect(report.body.timezone).toBe("Asia/Kolkata");
+    expect(report.body.items).toEqual([
+      expect.objectContaining({ teacherId: teacher.id, averageCheckInTime: "08:30" })
+    ]);
   }, 30000);
 
   it("rejects invalid admin filters, impossible dates, and reversed ranges", async () => {

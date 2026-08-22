@@ -256,8 +256,10 @@ function buildPayload(config: EntityConfig, form: Record<string, unknown>): Reco
     }
 
     const trimmed = textOf(value).trim();
-    // Optional fields must be omitted rather than sent as "" so zod validators pass.
     if (!trimmed && !field.required) {
+      if (field.kind === "ref") {
+        payload[field.name] = null;
+      }
       continue;
     }
 

@@ -33,7 +33,7 @@ const en = {
     backToHome: "Back to home"
   },
   landing: {
-    badge: "Built for J. R. School",
+    badge: "Built for J. R. P. School",
     navFeatures: "Features",
     navRoles: "Roles",
     heroTitlePrefix: "Daily attendance,",
@@ -609,6 +609,7 @@ const en = {
     action: "Action",
     checkIn: "Check-in",
     addedAfterApproval: "Added after approved request",
+    noClassAssigned: "No class assigned",
     status: {
       on_time: "On time",
       late: "Late",
@@ -654,6 +655,13 @@ const en = {
     onLeaveDaysLabel: "On leave",
     missedDaysLabel: "Absent",
     summaryTotalDays: "Working days",
+    averageCheckIn: "Average in-time",
+    phoneRequiredTitle: "Add your phone number",
+    phoneRequiredHint: "A phone number is required before you continue. It is used for leave and school communication.",
+    phoneInvalid: "Enter a valid phone number with 10 to 15 digits.",
+    phoneSaved: "Phone number saved.",
+    phoneSaveFailed: "Unable to save your phone number.",
+    savePhone: "Save and continue",
     onLeaveCount: "{{count}} on leave",
     missedCountLabel: "{{count}} absent",
     manualApplyHint: "Could not check in on a past working day? Apply for it from the Attendance View tab.",

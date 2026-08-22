@@ -8,7 +8,7 @@ export const CreateClassSchema = z.object({
 export const CreateTeacherSchema = z.object({
   userId: z.string().optional(),
   fullName: z.string().min(1),
-  classId: z.string().optional(),
+  classId: z.string().nullable().optional(),
   phoneNumber: z.string().optional(),
   isActive: z.boolean().optional()
 });

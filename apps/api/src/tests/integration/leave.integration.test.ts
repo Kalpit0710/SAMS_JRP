@@ -149,7 +149,7 @@ describe("teacher leave management", () => {
     expect(analytics.body.trend).toEqual([{ period: fromDate, leaveDays: 1 }]);
   });
 
-  it("scopes teacher detail access and allows pending withdrawal", async () => {
+  it("supports classless staff leave, scopes detail access and allows pending withdrawal", async () => {
     await UserModel.create({
       fullName: "Scope Admin",
       username: "scope.admin",
@@ -186,6 +186,15 @@ describe("teacher leave management", () => {
     expect(created.body.item.adminWhatsAppLink).toContain("https://wa.me/?text=");
 
     const { agent: secondAgent, accessToken: secondToken } = await loginAs("second.teacher", "Teacher@12345");
+    const staffLeaveDate = futureDateKey(22);
+    const staffLeave = await secondAgent
+      .post("/api/leaves")
+      .set("Authorization", `Bearer ${secondToken}`)
+      .send({ fromDate: staffLeaveDate, toDate: staffLeaveDate, reason: "Non-teaching staff leave" });
+    expect(staffLeave.status).toBe(201);
+    expect(staffLeave.body.item.className).toBe("");
+    expect(staffLeave.body.item).not.toHaveProperty("classId");
+
     const hidden = await secondAgent
       .get(`/api/leaves/${created.body.item._id}`)
       .set("Authorization", `Bearer ${secondToken}`);

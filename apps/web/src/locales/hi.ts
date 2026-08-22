@@ -33,7 +33,7 @@ const hi = {
     backToHome: "होम पर वापस जाएँ"
   },
   landing: {
-    badge: "जे. आर. स्कूल के लिए बनाया गया",
+    badge: "जे. आर. पी. स्कूल के लिए बनाया गया",
     navFeatures: "विशेषताएँ",
     navRoles: "भूमिकाएँ",
     heroTitlePrefix: "रोज़ की उपस्थिति,",
@@ -609,6 +609,7 @@ const hi = {
     action: "कार्रवाई",
     checkIn: "चेक-इन",
     addedAfterApproval: "स्वीकृत अनुरोध के बाद जोड़ा गया",
+    noClassAssigned: "कोई कक्षा निर्धारित नहीं",
     status: {
       on_time: "समय पर",
       late: "देर से",
@@ -654,6 +655,13 @@ const hi = {
     onLeaveDaysLabel: "अवकाश पर",
     missedDaysLabel: "अनुपस्थित",
     summaryTotalDays: "कार्य दिवस",
+    averageCheckIn: "औसत आने का समय",
+    phoneRequiredTitle: "अपना फ़ोन नंबर जोड़ें",
+    phoneRequiredHint: "आगे बढ़ने से पहले फ़ोन नंबर आवश्यक है। इसका उपयोग अवकाश और विद्यालय संचार के लिए किया जाता है।",
+    phoneInvalid: "10 से 15 अंकों का मान्य फ़ोन नंबर दर्ज करें।",
+    phoneSaved: "फ़ोन नंबर सहेजा गया।",
+    phoneSaveFailed: "फ़ोन नंबर सहेजा नहीं जा सका।",
+    savePhone: "सहेजें और आगे बढ़ें",
     onLeaveCount: "{{count}} अवकाश पर",
     missedCountLabel: "{{count}} अनुपस्थित",
     manualApplyHint: "किसी पिछले कार्य दिवस पर चेक-इन नहीं कर सके? उपस्थिति दृश्य टैब से आवेदन करें।",

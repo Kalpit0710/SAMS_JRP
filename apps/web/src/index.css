@@ -2925,6 +2925,15 @@ input:focus {
   background: var(--bg-input);
   color: var(--text-secondary);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.ta-teacher-chip small {
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
 }
 
 .ta-teacher-chip.present { background: rgba(16, 185, 129, 0.15); color: var(--success); border-color: transparent; }
@@ -2982,6 +2991,36 @@ input:focus {
   background: var(--bg-input);
   color: var(--text-primary);
   font: inherit;
+}
+
+.ta-phone-modal {
+  max-width: 390px;
+}
+
+.ta-phone-modal h3,
+.ta-phone-modal p {
+  margin: 0;
+}
+
+.ta-phone-modal p {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.ta-phone-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.ta-form-error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 0.85rem;
 }
 
 /* Animations */
