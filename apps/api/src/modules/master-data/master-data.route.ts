@@ -42,10 +42,10 @@ function escapeRegex(value: string): string {
 /** Verifies a referenced document exists; returns a 4xx message or null when valid. */
 async function referenceError(
   model: { exists: (filter: Record<string, unknown>) => Promise<unknown> },
-  id: string | undefined,
+  id: string | null | undefined,
   label: string
 ): Promise<string | null> {
-  if (id === undefined) {
+  if (id === undefined || id === null) {
     return null;
   }
   if (!mongoose.isValidObjectId(id)) {
@@ -311,7 +311,7 @@ masterDataRouter.patch(
       return res.status(400).json({ message: "Invalid teacher update payload", errors: parsed.error.flatten() });
     }
 
-    const classRefError = await referenceError(ClassModel, parsed.data.classId || undefined, "classId");
+    const classRefError = await referenceError(ClassModel, parsed.data.classId, "classId");
     if (classRefError) {
       return res.status(400).json({ message: classRefError });
     }
@@ -324,8 +324,11 @@ masterDataRouter.patch(
     if (parsed.data.userId !== undefined) {
       update.userId = parsed.data.userId ? new mongoose.Types.ObjectId(parsed.data.userId) : undefined;
     }
-    if (parsed.data.classId !== undefined) {
-      update.classId = parsed.data.classId ? new mongoose.Types.ObjectId(parsed.data.classId) : undefined;
+    if (parsed.data.classId === null) {
+      delete update.classId;
+      update.$unset = { classId: 1 };
+    } else if (parsed.data.classId !== undefined) {
+      update.classId = new mongoose.Types.ObjectId(parsed.data.classId);
     }
 
     const item = await TeacherModel.findByIdAndUpdate(req.params.id, update, { new: true });

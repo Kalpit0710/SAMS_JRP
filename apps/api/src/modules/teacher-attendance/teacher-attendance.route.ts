@@ -24,6 +24,7 @@ import {
   TeacherAttendanceOverviewSchema,
   TeacherAttendanceReportSchema,
   TeacherAttendanceSettingsSchema,
+  UpdateTeacherPhoneSchema,
   timeToMinutes
 } from "./teacher-attendance.schema.js";
 import {
@@ -54,6 +55,29 @@ function schoolDateKey(timezone: string = DEFAULT_TIMEZONE, now = new Date()): s
 
 function schoolMinutes(timezone: string = DEFAULT_TIMEZONE, now = new Date()): number {
   return minutesInZone(timezone, now);
+}
+
+function checkInMinutes(record: Record<string, unknown> | null, timezone: string): number | null {
+  if (!record?.checkInAtServer || record.source === "manual_application") return null;
+  const date = record.checkInAtServer instanceof Date
+    ? record.checkInAtServer
+    : new Date(String(record.checkInAtServer));
+  if (Number.isNaN(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: timezone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23"
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : null;
+}
+
+function averageTime(totalMinutes: number, count: number): string | null {
+  if (count === 0) return null;
+  const rounded = Math.round(totalMinutes / count);
+  return `${String(Math.floor(rounded / 60)).padStart(2, "0")}:${String(rounded % 60).padStart(2, "0")}`;
 }
 
 function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
@@ -279,6 +303,53 @@ teacherAttendanceRouter.get(
 );
 
 teacherAttendanceRouter.get(
+  "/me/profile",
+  requireRoles(["teacher"]),
+  asyncHandler(async (req, res) => {
+    const teacher = await getTeacher(req.auth!.userId);
+    if (!teacher) return res.status(403).json({ message: "Teacher account is not active" });
+    return res.json({
+      item: {
+        _id: teacher.id,
+        fullName: teacher.fullName,
+        phoneNumber: teacher.phoneNumber ?? "",
+        classId: teacher.classId ?? null
+      }
+    });
+  })
+);
+
+teacherAttendanceRouter.patch(
+  "/me/profile",
+  requireRoles(["teacher"]),
+  asyncHandler(async (req, res) => {
+    const parsed = UpdateTeacherPhoneSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Invalid phone number", errors: parsed.error.flatten() });
+    }
+    const teacher = await TeacherModel.findOneAndUpdate(
+      { userId: new mongoose.Types.ObjectId(req.auth!.userId), isActive: true },
+      { $set: { phoneNumber: parsed.data.phoneNumber } },
+      { returnDocument: "after" }
+    );
+    if (!teacher) return res.status(403).json({ message: "Teacher account is not active" });
+    setAuditMeta(res, {
+      action: "TEACHER_PHONE_UPDATE",
+      resource: "teacher/profile",
+      metadata: { teacherId: teacher.id }
+    });
+    return res.json({
+      item: {
+        _id: teacher.id,
+        fullName: teacher.fullName,
+        phoneNumber: teacher.phoneNumber,
+        classId: teacher.classId ?? null
+      }
+    });
+  })
+);
+
+teacherAttendanceRouter.get(
   "/settings",
   requireRoles(["admin", "teacher"]),
   asyncHandler(async (_req, res) => res.json(await getTeacherAttendanceSettings()))
@@ -354,12 +425,13 @@ teacherAttendanceRouter.get(
     if (parsed.data.teacherId && mongoose.Types.ObjectId.isValid(parsed.data.teacherId)) teacherFilter._id = parsed.data.teacherId;
     if (parsed.data.classId && mongoose.Types.ObjectId.isValid(parsed.data.classId)) teacherFilter.classId = parsed.data.classId;
     const teachers = await TeacherModel.find(teacherFilter).select("fullName classId").populate("classId", "name").lean();
-    const { rows } = await buildDayRows({ teachers, from: parsed.data.from, to: parsed.data.to });
+    const { rows, context } = await buildDayRows({ teachers, from: parsed.data.from, to: parsed.data.to });
 
     const byTeacher = new Map<string, {
       teacherId: string; teacherName: string; className: string;
       workingDays: number; present: number; late: number; absent: number; onLeave: number;
       corrected: number; conflicts: number; pendingCorrections: number; notDue: number;
+      totalCheckInMinutes: number; timedCheckIns: number;
     }>();
 
     for (const row of rows) {
@@ -367,10 +439,16 @@ teacherAttendanceRouter.get(
         byTeacher.set(row.teacherId, {
           teacherId: row.teacherId, teacherName: row.teacherName, className: row.className,
           workingDays: 0, present: 0, late: 0, absent: 0, onLeave: 0,
-          corrected: 0, conflicts: 0, pendingCorrections: 0, notDue: 0
+          corrected: 0, conflicts: 0, pendingCorrections: 0, notDue: 0,
+          totalCheckInMinutes: 0, timedCheckIns: 0
         });
       }
       const entry = byTeacher.get(row.teacherId)!;
+      const arrivalMinutes = checkInMinutes(row.record, context.timezone);
+      if (arrivalMinutes !== null) {
+        entry.totalCheckInMinutes += arrivalMinutes;
+        entry.timedCheckIns += 1;
+      }
       if (!row.isWorkingDay) continue;
       if (row.status === "not_due" || row.status === "pending") { entry.notDue += 1; continue; }
       entry.workingDays += 1;
@@ -383,14 +461,14 @@ teacherAttendanceRouter.get(
       else if (row.effectiveStatus === "absent") entry.absent += 1;
     }
 
-    const items = [...byTeacher.values()].map((entry) => ({
+    const items = [...byTeacher.values()].map(({ totalCheckInMinutes, timedCheckIns, ...entry }) => ({
       ...entry,
-      // Non-working days are excluded from the denominator.
+      averageCheckInTime: averageTime(totalCheckInMinutes, timedCheckIns),
       attendanceRate: entry.workingDays === 0
         ? null
         : Math.round(((entry.present + entry.late) / entry.workingDays) * 1000) / 10
     }));
-    return res.json({ from: parsed.data.from, to: parsed.data.to, items });
+    return res.json({ from: parsed.data.from, to: parsed.data.to, timezone: context.timezone, items });
   })
 );
 
@@ -421,6 +499,7 @@ teacherAttendanceRouter.get(
     const byTeacher = new Map<string, {
       teacherId: string; teacherName: string; className: string;
       workingDays: number; present: number; late: number; absent: number; onLeave: number;
+      totalCheckInMinutes: number; timedCheckIns: number;
     }>();
 
     for (const row of rows) {
@@ -432,8 +511,15 @@ teacherAttendanceRouter.get(
         present: 0,
         late: 0,
         absent: 0,
-        onLeave: 0
+        onLeave: 0,
+        totalCheckInMinutes: 0,
+        timedCheckIns: 0
       };
+      const arrivalMinutes = checkInMinutes(row.record, context.timezone);
+      if (arrivalMinutes !== null) {
+        entry.totalCheckInMinutes += arrivalMinutes;
+        entry.timedCheckIns += 1;
+      }
       if (row.isWorkingDay && row.effectiveStatus !== null) {
         entry.workingDays += 1;
         if (row.effectiveStatus === "present") entry.present += 1;
@@ -444,8 +530,9 @@ teacherAttendanceRouter.get(
       byTeacher.set(row.teacherId, entry);
     }
 
-    const items = [...byTeacher.values()].map((entry) => ({
+    const items = [...byTeacher.values()].map(({ totalCheckInMinutes, timedCheckIns, ...entry }) => ({
       ...entry,
+      averageCheckInTime: averageTime(totalCheckInMinutes, timedCheckIns),
       attendanceRate: entry.workingDays === 0
         ? null
         : Math.round(((entry.present + entry.late) / entry.workingDays) * 1000) / 10

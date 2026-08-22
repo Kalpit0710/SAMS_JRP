@@ -307,6 +307,69 @@ describe("auth and reporting integration", () => {
     expect(csvExport.text).toContain("date,class,session,totalMarked,presentLike,rate");
   });
 
+  it("supports staff teachers without a class and keeps class-scoped data empty", async () => {
+    const admin = await UserModel.create({
+      fullName: "Staff Admin",
+      username: "staff.admin",
+      passwordHash: await hashPassword("Admin@12345"),
+      roles: ["admin"],
+      isActive: true
+    });
+    const staffUser = await UserModel.create({
+      fullName: "Non Teaching Staff",
+      username: "nonteaching.staff",
+      passwordHash: await hashPassword("1234"),
+      roles: ["teacher"],
+      isActive: true
+    });
+    const classDoc = await ClassModel.create({ name: "Class Staff Scope" });
+    await StudentModel.create({
+      regNo: "REG-STAFF-SCOPE",
+      fullName: "Scoped Student",
+      classId: classDoc._id,
+      status: "active"
+    });
+    const teacher = await TeacherModel.create({
+      userId: staffUser._id,
+      fullName: staffUser.fullName,
+      classId: classDoc._id,
+      isActive: true
+    });
+
+    const adminAgent = request.agent(app);
+    const adminLogin = await adminAgent.post("/api/auth/login").send({
+      username: admin.username,
+      password: "Admin@12345"
+    });
+    const cleared = await adminAgent
+      .patch(`/api/master-data/teachers/${teacher.id}`)
+      .set("Authorization", `Bearer ${adminLogin.body.accessToken as string}`)
+      .send({ classId: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.item).not.toHaveProperty("classId");
+    expect((await TeacherModel.findById(teacher._id).lean())?.classId).toBeUndefined();
+
+    const staffAgent = request.agent(app);
+    const staffLogin = await staffAgent.post("/api/auth/login").send({
+      username: staffUser.username,
+      password: "1234"
+    });
+    expect(staffLogin.status).toBe(200);
+    const authorization = { Authorization: `Bearer ${staffLogin.body.accessToken as string}` };
+    const [classes, students, overview] = await Promise.all([
+      staffAgent.get("/api/master-data/classes").set(authorization),
+      staffAgent.get("/api/master-data/students").set(authorization),
+      staffAgent.get("/api/reports/overview?days=30").set(authorization)
+    ]);
+
+    expect(classes.status).toBe(200);
+    expect(classes.body.items).toEqual([]);
+    expect(students.status).toBe(200);
+    expect(students.body.items).toEqual([]);
+    expect(overview.status).toBe(200);
+    expect(overview.body.totals).toEqual({ students: 0, classes: 0, todayMarked: 0, todayPresentLike: 0, todayRate: 0 });
+  });
+
   it("shows class view attendance by student and excludes Sundays from total classes", async () => {
     const admin = await UserModel.create({
       fullName: "Admin User",
